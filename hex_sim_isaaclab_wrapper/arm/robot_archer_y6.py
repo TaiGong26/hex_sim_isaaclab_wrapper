@@ -193,39 +193,26 @@ class HexRobotSimArcherY6(HexRobotSimBase):
     # ------------------------------------------------------------------
 
     def update(self) -> None:
-        """Single simulation step: process commands → step → fire callbacks."""
+        """Single simulation step: process commands → step → update state."""
         sim = self._sim_interface
         if sim is None or not sim.is_running():
             return
 
-        # 1. Read current joint state from sim
-        arm_pos = sim.get_joint_positions("arm_y6")
-        arm_vel = sim.get_joint_velocities("arm_y6")
-
-        self._cur_state["arm"]["jnt_pos"][:] = arm_pos
-        self._cur_state["arm"]["jnt_vel"][:] = arm_vel
-
-        if self._has_grip:
-            grip_pos_all = sim.get_joint_positions("arm_y6")[self._grip_joint_slice]
-            grip_vel_all = sim.get_joint_velocities("arm_y6")[self._grip_joint_slice]
-            self._cur_state["grip"]["jnt_pos"][:] = grip_pos_all
-            self._cur_state["grip"]["jnt_vel"][:] = grip_vel_all
-
-        # 2. Process arm command
+        # 1. Process arm command
         self._process_arm_cmd()
 
-        # 3. Process grip command
+        # 2. Process grip command
         if self._has_grip:
             self._process_grip_cmd()
 
-        # 4. Step simulation
+        # 3. Step simulation
         sim.step()
 
-        # 5. Build state dataclass and fire callbacks
+        # 4. Read state from sim and publish callbacks
         try:
-            self._fire_arm_state()
+            self._update_arm_state()
             if self._has_grip:
-                self._fire_grip_state()
+                self._update_grip_state()
         except Exception:
             pass  # state callback failure should not crash the sim loop
 
@@ -398,6 +385,9 @@ class HexRobotSimArcherY6(HexRobotSimBase):
 
     def _process_arm_cmd(self) -> None:
         """Peek latest arm command, apply to sim interface."""
+        
+        ### TODO: 修改具体的命令处理逻辑，确保与仿真接口的交互正确
+        
         temp = deque_helper(self._deque_dict["arm_cmd"], latest=True)
         if temp is not None:
             self._cur_cmd["arm_cmd"] = temp
@@ -429,6 +419,9 @@ class HexRobotSimArcherY6(HexRobotSimBase):
 
     def _process_grip_cmd(self) -> None:
         """Peek latest grip command, apply to sim interface."""
+        
+        ### TODO: 修改具体的命令处理逻辑，确保与仿真接口的交互正确
+        
         temp = deque_helper(self._deque_dict["grip_cmd"], latest=True)
         if temp is not None:
             self._cur_cmd["grip_cmd"] = temp
@@ -454,14 +447,18 @@ class HexRobotSimArcherY6(HexRobotSimBase):
             sim.set_joint_effort_target("arm_y6", target, joint_ids=self._grip_joint_slice)
 
     # ------------------------------------------------------------------
-    # Internal — state callback firing
+    # Internal — state update and publish
     # ------------------------------------------------------------------
 
-    def _fire_arm_state(self) -> None:
+    def _update_arm_state(self) -> None:
+        """Read arm joint state from sim → build msg → push to callback deque."""
         sim = self._sim_interface
-        state = self._cur_state["arm"]
-        pos = state["jnt_pos"].copy()
-        vel = state["jnt_vel"].copy()
+
+        pos = sim.get_joint_positions("arm_y6")
+        vel = sim.get_joint_velocities("arm_y6")
+
+        self._cur_state["arm"]["jnt_pos"][:] = pos
+        self._cur_state["arm"]["jnt_vel"][:] = vel
 
         # Estimate effort from PD law: τ = k*(q_d - q) - d*v
         if self._last_arm_target is not None:
@@ -475,16 +472,24 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         state_msg = HexDcRoboArmStateStamped(
             header=build_header(),
             arm_state=HexDcRoboArmState(
-                jnt=HexDcBaseJntState(position=pos, velocity=vel, effort=eff),
+                jnt=HexDcBaseJntState(position=pos.copy(), velocity=vel.copy(), effort=eff),
                 pose=build_pose(ee_pos, ee_quat),
             ),
         )
         self._callbacks["arm_state"](state_msg)
 
-    def _fire_grip_state(self) -> None:
-        state = self._cur_state["grip"]
-        pos = state["jnt_pos"].copy()[:1]    # expose as 1-DOF
-        vel = state["jnt_vel"].copy()[:1]
+    def _update_grip_state(self) -> None:
+        """Read grip joint state from sim → build msg → push to callback deque."""
+        sim = self._sim_interface
+
+        grip_pos_all = sim.get_joint_positions("arm_y6")[self._grip_joint_slice]
+        grip_vel_all = sim.get_joint_velocities("arm_y6")[self._grip_joint_slice]
+
+        self._cur_state["grip"]["jnt_pos"][:] = grip_pos_all
+        self._cur_state["grip"]["jnt_vel"][:] = grip_vel_all
+
+        pos = grip_pos_all.copy()[:1]    # expose as 1-DOF
+        vel = grip_vel_all.copy()[:1]
         eff = np.zeros(1)
 
         state_msg = HexDcRoboGripStateStamped(

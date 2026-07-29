@@ -88,7 +88,7 @@ class HexRobotSimBase(ABC):
         return self._sim_interface.is_running()
 
     # ------------------------------------------------------------------
-        # Subclass hooks
+    # Subclass hooks
     # ------------------------------------------------------------------
 
     @abstractmethod

@@ -13,6 +13,7 @@ from typing import Optional
 
 import numpy as np
 
+from ..utils import numpy_to_torch, torch_to_numpy
 from .interface import SimInterface
 
 
@@ -135,19 +136,16 @@ class IsaacLabSimInterface(SimInterface):
     # ------------------------------------------------------------------
 
     def get_joint_positions(self, name: str) -> np.ndarray:
-        from .utils import torch_to_numpy
         _require_scene(self)
         art = self._scene[name]
         return torch_to_numpy(art.data.joint_pos[0])
 
     def get_joint_velocities(self, name: str) -> np.ndarray:
-        from .utils import torch_to_numpy
         _require_scene(self)
         art = self._scene[name]
         return torch_to_numpy(art.data.joint_vel[0])
 
     def get_joint_efforts(self, name: str) -> np.ndarray:
-        from .utils import torch_to_numpy
         _require_scene(self)
         art = self._scene[name]
         # applied efforts from the previous physics step
@@ -155,7 +153,6 @@ class IsaacLabSimInterface(SimInterface):
 
     def get_body_pose(self, name: str, body_name: str) -> tuple[np.ndarray, np.ndarray]:
         """Read body pose in the base (root) frame."""
-        from .utils import torch_to_numpy
         _require_scene(self)
         art = self._scene[name]
 
@@ -179,7 +176,6 @@ class IsaacLabSimInterface(SimInterface):
 
     def get_body_pose_world(self, name: str, body_name: str) -> tuple[np.ndarray, np.ndarray]:
         """Read body pose in the world frame."""
-        from .utils import torch_to_numpy
         _require_scene(self)
         art = self._scene[name]
 
@@ -195,14 +191,12 @@ class IsaacLabSimInterface(SimInterface):
         Faster than ``get_body_pose_world`` when the body ID is known
         (avoids re-resolving every call).
         """
-        from .utils import torch_to_numpy
         _require_scene(self)
         art = self._scene[name]
         body_pose_w = art.data.body_pose_w[0, body_idx]
         return torch_to_numpy(body_pose_w[:3]), torch_to_numpy(body_pose_w[3:7])
 
     def get_root_pose(self, name: str) -> tuple[np.ndarray, np.ndarray]:
-        from .utils import torch_to_numpy
         _require_scene(self)
         art = self._scene[name]
         root_pose = art.data.root_pose_w[0]
@@ -214,7 +208,6 @@ class IsaacLabSimInterface(SimInterface):
 
     def set_joint_position_target(self, name: str, target: np.ndarray,
                                    joint_ids: Optional[list[int]] = None) -> None:
-        from .utils import numpy_to_torch
         _require_scene(self)
         art = self._scene[name]
         t = numpy_to_torch(target, self._device).unsqueeze(0)
@@ -227,7 +220,6 @@ class IsaacLabSimInterface(SimInterface):
 
     def set_joint_velocity_target(self, name: str, target: np.ndarray,
                                    joint_ids: Optional[list[int]] = None) -> None:
-        from .utils import numpy_to_torch
         _require_scene(self)
         art = self._scene[name]
         t = numpy_to_torch(target, self._device).unsqueeze(0)
@@ -240,7 +232,6 @@ class IsaacLabSimInterface(SimInterface):
 
     def set_joint_effort_target(self, name: str, target: np.ndarray,
                                  joint_ids: Optional[list[int]] = None) -> None:
-        from .utils import numpy_to_torch
         _require_scene(self)
         art = self._scene[name]
         t = numpy_to_torch(target, self._device).unsqueeze(0)
@@ -252,7 +243,6 @@ class IsaacLabSimInterface(SimInterface):
             art.set_joint_effort_target(t)
 
     def set_joint_state(self, name: str, position: np.ndarray, velocity: np.ndarray) -> None:
-        from .utils import numpy_to_torch
         _require_scene(self)
         art = self._scene[name]
         p = numpy_to_torch(position, self._device).unsqueeze(0)
@@ -318,7 +308,6 @@ class IsaacLabSimInterface(SimInterface):
         """
         import torch
         import isaaclab.utils.math as math_utils
-        from .utils import torch_to_numpy
 
         _require_scene(self)
         art = self._scene[name]
@@ -381,7 +370,6 @@ class IsaacLabSimInterface(SimInterface):
         self._scene_ready = True
 
         # Cache joint counts
-        from .utils import torch_to_numpy
         for robot_name in self._robot_configs:
             art = self._scene[robot_name]
             self._num_joints[robot_name] = torch_to_numpy(

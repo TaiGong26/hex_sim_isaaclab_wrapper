@@ -30,8 +30,8 @@ from hex_util_msg.dataclass import (
 )
 from hex_util_runtime import deque_helper, ns_now
 
+from ..utils import build_header, build_hex_jnt, torch_to_numpy
 from .base import HexRobotSimBase, HexRobotSimParams
-from .utils import build_header, build_hex_jnt, torch_to_numpy
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +54,7 @@ _GRIP_TO_USD: dict[str, str] = {
     "gr100": "HEX_ISAAC_USD_ARCHER_Y6_GR100_CFG",
     "gp100": "HEX_ISAAC_USD_ARCHER_Y6_GR100_CFG",
 }
+
 # Sim USD always has 2 grip joints (J1, J2). User commands 1-DOF values;
 # we replicate to both joints internally.
 _SIM_GRIP_DOF = 2
@@ -66,7 +67,7 @@ _SIM_GRIP_DOF = 2
 @dataclass
 class HexRobotSimArcherY6Params(HexRobotSimParams):
     """Parameters for simulated Archer Y6 (no hardware concepts)."""
-    grip_type: str = "gp80"       # "gp80", "gr100", "gp100", "empty"
+    grip_type: str = "gp80"       # "gp80", "gr100", "empty"
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +172,7 @@ class HexRobotSimArcherY6(HexRobotSimBase):
 
     def init_robot(self) -> None:
         # 1. Create Isaac Lab interface — *first* to satisfy AppLauncher
-        from .isaaclab_interface import IsaacLabSimInterface
+        from ..sim.isaaclab_interface import IsaacLabSimInterface
 
         cli_args = ["--headless"] if self._headless else []
         sim = IsaacLabSimInterface()

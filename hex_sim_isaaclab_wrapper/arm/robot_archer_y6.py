@@ -388,32 +388,6 @@ class HexRobotSimArcherY6(HexRobotSimBase):
             return None
         return deque_helper(self._deque_user["grip_state"], latest=latest)
 
-    def get_arm_motor_status(self) -> Optional[dict]:
-        """Return dict with motor temp/error info (sim: defaults)."""
-        return {
-            "motor_temp": [0.0] * self._dof_dict["arm"],
-            "driver_temp": [0.0] * self._dof_dict["arm"],
-            "error": [0] * self._dof_dict["arm"],
-        }
-
-    def get_grip_motor_status(self) -> Optional[dict]:
-        """Return grip motor status (sim: defaults), or None if grip disabled."""
-        if not self._has_grip:
-            return None
-        return {
-            "motor_temp": [0.0],
-            "driver_temp": [0.0],
-            "error": [0],
-        }
-
-    def get_arm_robot_mode(self) -> str:
-        """Sim always reports RmRunning."""
-        return "RmRunning"
-
-    def is_control_able(self) -> bool:
-        """Sim is always controllable."""
-        return True
-
     def get_dofs(self) -> dict[str, int]:
         """Return dict with 'arm' and 'grip' DOF counts."""
         return dict(self._dof_dict)

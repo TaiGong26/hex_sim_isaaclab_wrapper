@@ -15,7 +15,6 @@ Key differences from real ``HexRobotBase``:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 # ---------------------------------------------------------------------------

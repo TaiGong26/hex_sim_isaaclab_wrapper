@@ -15,7 +15,7 @@ from hex_util_runtime import ns_now
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Time / Header
 # ---------------------------------------------------------------------------
 
 def _ns_to_time(ts_ns: int) -> HexDcBaseTime:
@@ -32,7 +32,26 @@ def build_header(ts_ns: Optional[int] = None) -> HexDcBaseHeader:
     return HexDcBaseHeader(stamp=_ns_to_time(int(ts_ns)))
 
 
+# ---------------------------------------------------------------------------
+# Primitives
+# ---------------------------------------------------------------------------
+
+def build_vector3(x: float = 0.0, y: float = 0.0, z: float = 0.0) -> HexDcBaseVector3:
+    """Build a HexDcBaseVector3."""
+    return HexDcBaseVector3(x=x, y=y, z=z)
+
+
+def build_quaternion(w: float = 1.0, x: float = 0.0, y: float = 0.0, z: float = 0.0) -> HexDcBaseQuaternion:
+    """Build a HexDcBaseQuaternion (wxyz)."""
+    return HexDcBaseQuaternion(w=w, x=x, y=y, z=z)
+
+
+# ---------------------------------------------------------------------------
+# Composite builders
+# ---------------------------------------------------------------------------
+
 def build_hex_jnt(
+    *,
     pos=None,
     vel=None,
     eff=None,
@@ -40,7 +59,11 @@ def build_hex_jnt(
     kd=None,
     dof: int = 0,
 ) -> HexDcBaseJntFull:
-    """Build a HexDcBaseJntFull from optional arrays, defaulting to zeros."""
+    """Build a HexDcBaseJntFull from optional arrays, defaulting to zeros.
+
+    All fields are keyword-only.  *dof* controls the fallback zero-array
+    length when a field is omitted.
+    """
     return HexDcBaseJntFull(
         pos=np.asarray(pos) if pos is not None else np.zeros(dof),
         vel=np.asarray(vel) if vel is not None else np.zeros(dof),
@@ -60,8 +83,8 @@ def build_pose(
     if quat is None:
         quat = np.array([1.0, 0.0, 0.0, 0.0])
     return HexDcBasePose(
-        position=HexDcBaseVector3(x=float(pos[0]), y=float(pos[1]), z=float(pos[2])),
-        orientation=HexDcBaseQuaternion(
+        position=build_vector3(x=float(pos[0]), y=float(pos[1]), z=float(pos[2])),
+        orientation=build_quaternion(
             w=float(quat[0]), x=float(quat[1]), y=float(quat[2]), z=float(quat[3]),
         ),
     )
@@ -69,6 +92,8 @@ def build_pose(
 
 __all__ = [
     "build_header",
+    "build_vector3",
+    "build_quaternion",
     "build_hex_jnt",
     "build_pose",
 ]

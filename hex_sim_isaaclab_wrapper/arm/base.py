@@ -86,6 +86,8 @@ class HexRobotSimBase(ABC):
         robot.start()                     # non-blocking, kicks off thread
         while robot.is_working():
             robot.set_arm_pos_cmd({...})
+            robot.step()                  # process → sim step → read state
+            state = robot.get_arm_state()
             time.sleep(1.0 / params.ctrl_rate)
         robot.stop()                      # joins thread, closes sim
     """
@@ -148,7 +150,27 @@ class HexRobotSimBase(ABC):
     def work_loop(self) -> None:
         """Background thread body — called at ``ctrl_rate`` via ``HexRate``.
 
-        Implementations typically: process commands → sim.step() → publish state.
+        .. note::
+           Sim stepping should **not** be done here — call :meth:`step` from
+           the main thread instead.  Isaac Lab's ``SimulationContext.step()``
+           expects to run on the same thread as the application event loop.
+        """
+        ...
+
+    @abstractmethod
+    def step(self) -> None:
+        """Synchronous sim step — call from **main thread** periodically.
+
+        Processes pending commands → applies them → steps simulation →
+        reads state into deques.
+
+        Usage in a control loop::
+
+            while robot.is_working():
+                robot.set_arm_pos_cmd({"jnt_pos": [...]})
+                robot.step()
+                state = robot.get_arm_state()
+                time.sleep(1.0 / params.ctrl_rate)
         """
         ...
 

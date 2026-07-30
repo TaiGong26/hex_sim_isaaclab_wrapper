@@ -27,6 +27,7 @@ def main():
         headless=False,
         num_envs=1,
         grip_type="gr100",
+        ctrl_rate = 100.0
     )
 
     robot = HexRobotSimArcherY6(params)
@@ -53,18 +54,22 @@ def main():
 
         robot.set_arm_pos_cmd({"jnt_pos": target})
         robot.set_grip_pos_cmd({"jnt_pos": tau})
-        
+
+        robot.step()
+
         arm_state = robot.get_arm_state()
         grip_state = robot.get_grip_state()
         
         if arm_state is not None:
-            print(f"[arm]: pos={arm_state.arm_state.jnt.position}  "
+            print(f"[arm]: pos={arm_state.arm_state.jnt.position}  \n"
                   f"vel={arm_state.arm_state.jnt.velocity}")
 
         if grip_state is not None:
-            print(f"[grip]: pos={grip_state.grip_state.jnt.position}  "
+            print(f"[grip]: pos={grip_state.grip_state.jnt.position}  \n"
                   f"vel={grip_state.grip_state.jnt.velocity}")
 
+        count += 1
+        time.sleep(1.0 / params.ctrl_rate)
 
     robot.stop()
     print(f"[INFO]: Done ({count} steps).")

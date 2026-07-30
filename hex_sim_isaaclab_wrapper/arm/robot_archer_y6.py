@@ -181,29 +181,39 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         self._default_joint_pos = torch_to_numpy(articulation.data.default_joint_pos[0])
 
     # ------------------------------------------------------------------
-    # work_loop — background thread body
+    # work_loop — background thread body (heartbeat only, no sim ops)
     # ------------------------------------------------------------------
 
     def work_loop(self) -> None:
-        """Background thread: frequency-controlled sim stepping."""
+        """Background heartbeat.
+
+        Sim stepping is done synchronously via :meth:`step` on the main
+        thread to keep ``SimulationContext.step()`` on the event-loop thread.
+        """
         rate = HexRate(self._params.ctrl_rate)
         while self.is_working():
             rate.sleep()
 
-            # 1. Process arm command
-            self._process_arm_cmd()
-            # 2. Process grip command
+    # ------------------------------------------------------------------
+    # step — synchronous sim pipeline (call from main thread)
+    # ------------------------------------------------------------------
+
+    def step(self) -> None:
+        """Process commands → step simulation → publish state."""
+        # 1. Process arm command
+        self._process_arm_cmd()
+        # 2. Process grip command
+        if self._has_grip:
+            self._process_grip_cmd()
+        # 3. Step simulation (applies pending commands internally)
+        self._sim_interface.step()
+        # 4. Read state and publish callbacks
+        try:
+            self._update_arm_state()
             if self._has_grip:
-                self._process_grip_cmd()
-            # 3. Step simulation (applies pending commands internally)
-            self._sim_interface.step()
-            # 4. Read state and publish callbacks
-            try:
-                self._update_arm_state()
-                if self._has_grip:
-                    self._update_grip_state()
-            except Exception:
-                self.loge("State callback failure", exc_info=True)
+                self._update_grip_state()
+        except Exception:
+            self.loge("State callback failure", exc_info=True)
 
     # ------------------------------------------------------------------
     # Command setters — same signatures as real HexRobotArcherY6
@@ -451,12 +461,13 @@ class HexRobotSimArcherY6(HexRobotSimBase):
 
         pos = sim.get_joint_positions(self._arm_actuator)
         vel = sim.get_joint_velocities(self._arm_actuator)
+        eff = sim.get_joint_efforts(self._arm_actuator)
 
         self._cur_state["arm"]["jnt_pos"][:] = pos
         self._cur_state["arm"]["jnt_vel"][:] = vel
+        self._cur_state["arm"]["jnt_eff"][:] = eff
 
-        # TODO: estimate effort from PD + position error
-        eff = None
+        # TODO: FK
 
         # EE pose from sim FK (use cached body ID)
         ee_pos, ee_quat = sim.get_body_pose_world_by_id(self._ee_body_id)
@@ -475,15 +486,13 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         sim = self._sim_interface
         assert self._grip_actuator is not None
 
-        grip_pos_all = sim.get_joint_positions(self._grip_actuator)
-        grip_vel_all = sim.get_joint_velocities(self._grip_actuator)
-
-        self._cur_state["grip"]["jnt_pos"][:] = grip_pos_all
-        self._cur_state["grip"]["jnt_vel"][:] = grip_vel_all
-
-        pos = grip_pos_all.copy()[:1]    # expose as 1-DOF
-        vel = grip_vel_all.copy()[:1]
-        eff = np.zeros(1)
+        pos = sim.get_joint_positions(self._grip_actuator)
+        vel = sim.get_joint_velocities(self._grip_actuator)
+        eff = sim.get_joint_efforts(self._arm_actuator)
+    
+        self._cur_state["grip"]["jnt_pos"][:] = pos
+        self._cur_state["grip"]["jnt_vel"][:] = vel
+        self._cur_state["grip"]["jnt_eff"][:] = eff
 
         state_msg = HexDcRoboGripStateStamped(
             header=build_header(),

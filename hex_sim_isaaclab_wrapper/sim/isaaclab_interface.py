@@ -179,16 +179,16 @@ class IsaacLabSimInterface(SimInterface):
     def get_joint_positions(self, actuator: str) -> np.ndarray:
         """:meth:`SimInterface.get_joint_positions`."""
         articulation = self._get_articulation()
-        data = torch_to_numpy(articulation.data.joint_pos[0])
         jids = articulation.actuators[actuator].joint_indices
-        return data[jids]
+        joint_pos = articulation.data.joint_pos.clone()
+        return torch_to_numpy(joint_pos[0, jids])
 
     def get_joint_velocities(self, actuator: str) -> np.ndarray:
         """:meth:`SimInterface.get_joint_velocities`."""
         articulation = self._get_articulation()
-        data = torch_to_numpy(articulation.data.joint_vel[0])
         jids = articulation.actuators[actuator].joint_indices
-        return data[jids]
+        joint_vel = articulation.data.joint_vel.clone()
+        return torch_to_numpy(joint_vel[0, jids])
 
     def get_joint_efforts(self, actuator: str) -> np.ndarray:
         """:meth:`SimInterface.get_joint_efforts`.
@@ -199,9 +199,9 @@ class IsaacLabSimInterface(SimInterface):
            The ``applied_torque`` tensor is updated in-place during each step.
         """
         articulation = self._get_articulation()
-        data = torch_to_numpy(articulation.data.applied_torque[0])
         jids = articulation.actuators[actuator].joint_indices
-        return data[jids]
+        torque = articulation.data.applied_torque.clone()
+        return torch_to_numpy(torque[0, jids])
 
     def get_body_pose(self, body_name: str) -> tuple[np.ndarray, np.ndarray]:
         """Read body pose in the base (root) frame.
@@ -261,59 +261,40 @@ class IsaacLabSimInterface(SimInterface):
         """
         if not self._pending_cmds:
             return
-        art = self._get_articulation()
+        articulation = self._get_articulation()
         for actuator_name, cmd in self._pending_cmds.items():
-            act = art.actuators[actuator_name]
-            jids = act.joint_indices
+            _articulation = articulation.actuators[actuator_name]
+            jids = _articulation.joint_indices
 
             # Position target
             if cmd.position is not None:
                 t = numpy_to_torch(cmd.position, self._device).unsqueeze(0)
-                if not isinstance(jids, slice) or jids != slice(None):
-                    full = art.data.joint_pos[0].clone()
-                    full[jids] = t[0]
-                    art.set_joint_position_target(full.unsqueeze(0))
-                else:
-                    art.set_joint_position_target(t)
+                articulation.set_joint_position_target(t, joint_ids=jids)
 
             # Velocity target
             if cmd.velocity is not None:
                 t = numpy_to_torch(cmd.velocity, self._device).unsqueeze(0)
-                if not isinstance(jids, slice) or jids != slice(None):
-                    full = art.data.joint_vel[0].clone()
-                    full[jids] = t[0]
-                    art.set_joint_velocity_target(full.unsqueeze(0))
-                else:
-                    art.set_joint_velocity_target(t)
+                articulation.set_joint_velocity_target(t, joint_ids=jids)
 
             # Effort target
             if cmd.effort is not None:
                 t = numpy_to_torch(cmd.effort, self._device).unsqueeze(0)
-                if not isinstance(jids, slice) or jids != slice(None):
-                    full = art.data.applied_torque[0].clone()
-                    full[jids] = t[0]
-                    art.set_joint_effort_target(full.unsqueeze(0))
-                else:
-                    art.set_joint_effort_target(t)
+                articulation.set_joint_effort_target(t, joint_ids=jids)
 
             # Stiffness / damping — dual path (actuator model + PhysX)
             if cmd.stiffness is not None or cmd.damping is not None:
                 kp = (numpy_to_torch(cmd.stiffness, self._device)
                       if cmd.stiffness is not None
-                      else act.stiffness.clone())
+                      else _articulation.stiffness.clone())
                 kd = (numpy_to_torch(cmd.damping, self._device)
                       if cmd.damping is not None
-                      else act.damping.clone())
-                act.stiffness[:] = kp
-                act.damping[:] = kd
-                if not isinstance(jids, slice) or jids != slice(None):
-                    art.write_joint_stiffness_to_sim(kp, joint_ids=jids)
-                    art.write_joint_damping_to_sim(kd, joint_ids=jids)
-                else:
-                    art.write_joint_stiffness_to_sim(kp)
-                    art.write_joint_damping_to_sim(kd)
+                      else _articulation.damping.clone())
+                _articulation.stiffness[:] = kp
+                _articulation.damping[:] = kd
+                articulation.write_joint_stiffness_to_sim(kp, joint_ids=jids)
+                articulation.write_joint_damping_to_sim(kd, joint_ids=jids)
 
-        self._pending_cmds.clear()
+        # self._pending_cmds.clear()
 
     def set_joint_state(self, position: np.ndarray, velocity: np.ndarray) -> None:
         articulation = self._get_articulation()

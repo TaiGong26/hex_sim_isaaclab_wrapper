@@ -1,6 +1,7 @@
 """Torch/numpy conversion helpers and quaternion math."""
 
 import numpy as np
+import torch
 
 
 # ---------------------------------------------------------------------------
@@ -14,8 +15,8 @@ def torch_to_numpy(tensor) -> np.ndarray:
 
 def numpy_to_torch(arr: np.ndarray, device: str = "cpu"):
     """Convert a numpy ndarray to a torch tensor on the given device."""
-    import torch
-    return torch.from_numpy(arr).to(device)
+    return torch.from_numpy(arr.astype(np.float32)).to(device)
+
 
 
 # ---------------------------------------------------------------------------

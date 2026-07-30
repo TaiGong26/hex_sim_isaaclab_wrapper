@@ -11,6 +11,7 @@ directly in HexRobotSimArcherY6Params below.
 """
 
 import argparse
+import time
 
 from hex_sim_isaaclab_wrapper import HexRobotSimArcherY6, HexRobotSimArcherY6Params
 
@@ -25,12 +26,15 @@ def main():
         device="cuda:0",
         headless=False,
         num_envs=1,
-        grip_type="empty",
+        grip_type="gr100",
     )
 
     robot = HexRobotSimArcherY6(params)
     robot.start()
     print("[INFO]: Setup complete, starting joint cycling.", flush=True)
+    
+    arm_state = None
+    grip_state = None
 
     count = 0
     while robot.is_working():
@@ -39,14 +43,28 @@ def main():
 
         if count < 200:
             target = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            tau = [0.5,0.5]
         elif count < 400:
             target = [0.0, -1.5, 3.0, 0.0, 0.0, 0.0]
+            tau = [0.0,0.0]
+            
         else:
             count = 0
 
         robot.set_arm_pos_cmd({"jnt_pos": target})
-        robot.update()
-        count += 1
+        robot.set_grip_pos_cmd({"jnt_pos": tau})
+        
+        arm_state = robot.get_arm_state()
+        grip_state = robot.get_grip_state()
+        
+        if arm_state is not None:
+            print(f"[arm]: pos={arm_state.arm_state.jnt.position}  "
+                  f"vel={arm_state.arm_state.jnt.velocity}")
+
+        if grip_state is not None:
+            print(f"[grip]: pos={grip_state.grip_state.jnt.position}  "
+                  f"vel={grip_state.grip_state.jnt.velocity}")
+
 
     robot.stop()
     print(f"[INFO]: Done ({count} steps).")

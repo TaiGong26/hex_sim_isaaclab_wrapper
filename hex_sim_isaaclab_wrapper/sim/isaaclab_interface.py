@@ -303,8 +303,8 @@ class IsaacLabSimInterface(SimInterface):
         articulation.write_joint_state_to_sim(p, v)
         articulation.reset()
 
-    def get_sim_dt(self) -> float:
-        return self._sim_dt
+    def get_sim_time(self) -> float:
+        return self._sim.current_time
 
     # ------------------------------------------------------------------
     # Simulation stepping

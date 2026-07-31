@@ -130,7 +130,7 @@ class HexRobotSimArcherY6(HexRobotSimBase):
             "arm": {
                 "jnt_pos": np.zeros(dof["arm"]),
                 "jnt_vel": np.zeros(dof["arm"]),
-                "comp_tau": np.zeros(dof["arm"]),
+                "jnt_eff": np.zeros(dof["arm"]),
             },
         }
         if self._has_grip:
@@ -138,7 +138,7 @@ class HexRobotSimArcherY6(HexRobotSimBase):
             self._cur_state["grip"] = {
                 "jnt_pos": np.zeros(dof["grip"]),
                 "jnt_vel": np.zeros(dof["grip"]),
-                "comp_tau": np.zeros(dof["grip"]),
+                "jnt_eff": np.zeros(dof["grip"]),
             }
 
     # ------------------------------------------------------------------
@@ -488,7 +488,7 @@ class HexRobotSimArcherY6(HexRobotSimBase):
 
         pos = sim.get_joint_positions(self._grip_actuator)
         vel = sim.get_joint_velocities(self._grip_actuator)
-        eff = sim.get_joint_efforts(self._arm_actuator)
+        eff = sim.get_joint_efforts(self._grip_actuator)
     
         self._cur_state["grip"]["jnt_pos"][:] = pos
         self._cur_state["grip"]["jnt_vel"][:] = vel

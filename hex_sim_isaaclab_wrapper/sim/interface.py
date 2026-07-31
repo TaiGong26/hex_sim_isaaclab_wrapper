@@ -177,7 +177,7 @@ class SimInterface(ABC):
         ...
 
     @abstractmethod
-    def get_sim_dt(self) -> float:
+    def get_sim_time(self) -> float:
         """Return the physics timestep [s]."""
         ...
 

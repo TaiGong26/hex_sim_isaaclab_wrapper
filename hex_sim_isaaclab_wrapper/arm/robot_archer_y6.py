@@ -165,24 +165,24 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         self._sim_interface = sim
 
         # 2. Now safe to import articulation configs (AppLauncher active)
-        cfg = _import_articulation_cfg(self._params.grip_type)
+        articulation_cfg = _import_articulation_cfg(self._params.grip_type)
 
         # 3. Spawn robot (builds scene)
-        sim.spawn_robot("archer_y6", cfg)
+        sim.spawn_robot("archer_y6", articulation_cfg)
 
         # 4. Step once to populate articulation data buffers
         sim.step()
 
         # 5. Resolve actuator names from the spawned articulation
         articulation = sim._scene["archer_y6"]
-        act_names = list(articulation.actuators.keys())
-        self._arm_actuator = act_names[0]
-        self._grip_actuator = act_names[1] if len(act_names) > 1 else None
+        actuator_names = list(articulation.actuators.keys())
+        self._arm_actuator = actuator_names[0]
+        self._grip_actuator = actuator_names[1] if len(actuator_names) > 1 else None
         self.logi(f"Actuators: arm={self._arm_actuator}, grip={self._grip_actuator}")
 
         # 5b. Resolve DOF counts from the spawned articulation (config-driven).
-        arm_act = articulation.actuators[self._arm_actuator]
-        self._dof_dict["arm"] = int(arm_act.num_joints)
+        arm_actuator_cfg = articulation.actuators[self._arm_actuator]
+        self._dof_dict["arm"] = int(arm_actuator_cfg.num_joints)
         self._dof_dict["grip"] = (
             int(articulation.actuators[self._grip_actuator].num_joints)
             if self._grip_actuator is not None else 0
@@ -211,23 +211,23 @@ class HexRobotSimArcherY6(HexRobotSimBase):
             }
 
         # Set Default Kp Kd
-        act = articulation.actuators[self._arm_actuator]
-        self._arm_kp_default = torch_to_numpy(act.stiffness[0]).copy()
-        self._arm_kd_default = torch_to_numpy(act.damping[0]).copy()
-        jids = act.joint_indices
+        arm_actuator_cfg = articulation.actuators[self._arm_actuator]
+        self._arm_kp_default = torch_to_numpy(arm_actuator_cfg.stiffness[0]).copy()
+        self._arm_kd_default = torch_to_numpy(arm_actuator_cfg.damping[0]).copy()
+        joint_indices = arm_actuator_cfg.joint_indices
         self._arm_kp_default_phys = torch_to_numpy(
-            articulation.data.default_joint_stiffness[0, jids]).copy()
+            articulation.data.default_joint_stiffness[0, joint_indices]).copy()
         self._arm_kd_default_phys = torch_to_numpy(
-            articulation.data.default_joint_damping[0, jids]).copy()
+            articulation.data.default_joint_damping[0, joint_indices]).copy()
         self.logi(
             f"Arm default PD (motor model): kp={self._arm_kp_default.tolist()}, "
             f"kd={self._arm_kd_default.tolist()}")
 
         # 6. Resolve EE body index for state FK
         from isaaclab.managers import SceneEntityCfg
-        ee_cfg = SceneEntityCfg("archer_y6", body_names=["link_6"])
-        ee_cfg.resolve(sim._scene)
-        self._ee_body_id = ee_cfg.body_ids[0]
+        ee_body_cfg = SceneEntityCfg("archer_y6", body_names=["link_6"])
+        ee_body_cfg.resolve(sim._scene)
+        self._ee_body_id = ee_body_cfg.body_ids[0]
 
         # 7. Store default joint positions (home)
         self._default_joint_pos = torch_to_numpy(articulation.data.default_joint_pos[0])

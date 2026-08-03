@@ -203,6 +203,18 @@ class IsaacLabSimInterface(SimInterface):
         torque = articulation.data.applied_torque.clone()
         return torch_to_numpy(torque[0, jids])
 
+    def get_gravity_coriolis_compensation(self, actuator: str) -> np.ndarray:
+        """:meth:`SimInterface.get_gravity_coriolis_compensation`.
+
+        PhysX-native: gravity compensation + Coriolis/centrifugal compensation,
+        summed = ``C*dq + G`` for the current articulation state.
+        """
+        articulation = self._get_articulation()
+        jids = articulation.actuators[actuator].joint_indices
+        gravity = articulation.root_physx_view.get_gravity_compensation_forces()
+        coriolis = articulation.root_physx_view.get_coriolis_and_centrifugal_compensation_forces()
+        return torch_to_numpy(gravity[0, jids] + coriolis[0, jids])
+
     def get_body_pose(self, body_name: str) -> tuple[np.ndarray, np.ndarray]:
         """Read body pose in the base (root) frame.
         (imports are cached — eagerly loaded in initialize())

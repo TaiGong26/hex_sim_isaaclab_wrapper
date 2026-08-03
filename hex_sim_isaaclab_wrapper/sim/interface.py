@@ -171,10 +171,6 @@ class SimInterface(ABC):
         """
         ...
 
-    @abstractmethod
-    def set_joint_state(self, position: np.ndarray, velocity: np.ndarray) -> None:
-        """Override joint state in simulation (for reset). No actuator param."""
-        ...
 
     @abstractmethod
     def get_sim_time(self) -> float:

@@ -46,13 +46,9 @@ _GRIP_TO_USD: dict[str, str] = {
     "gp100": "HEX_ISAAC_USD_ARCHER_Y6_GR100_CFG",
 }
 
-# Sim USD always has 2 grip joints (J1, J2). User commands 1-DOF values;
-# we replicate to both joints internally.
-_SIM_GRIP_DOF = 2
-
 # JNT/EE position-interpolation default max joint velocity [rad/s], used when
 # the command omits ``lim_vel`` (mirrors hex_driver_robot's default).
-_ARM_LIM_VEL_DEFAULT = 8.0
+_ARM_LIM_VEL_DEFAULT = 5.0
 
 # Default arm URDF for EE-mode analytic IK (HexDynUtilY6).  Same gripper-
 # compensated model as the Mujoco reference launch.  Resolved from the repo
@@ -133,29 +129,16 @@ class HexRobotSimArcherY6(HexRobotSimBase):
     # ------------------------------------------------------------------
 
     def init_vars(self) -> None:
-        dof = self._dof_dict
-        dof["arm"] = 6
-        dof["grip"] = _SIM_GRIP_DOF if self._has_grip else 0
+        """Non-DOF-dependent init.
 
+        DOF counts and the state/PD buffers sized by them are resolved in
+        init_robot(), after the USD config is loaded — dof_dict comes from the
+        config's actuators. ``_cur_state`` stays ``{}`` until then.
+        """
         self._deque_dict = {
             "arm_cmd": deque(maxlen=self._params.state_buffer_size),
         }
         self._cur_cmd = {"arm_cmd": None, "grip_cmd": None}
-
-        self._cur_state = {
-            "arm": {
-                "jnt_pos": np.zeros(dof["arm"]),
-                "jnt_vel": np.zeros(dof["arm"]),
-                "jnt_eff": np.zeros(dof["arm"]),
-                "comp_tau": np.zeros(dof["arm"]),  # gravity + Coriolis comp [Nm]
-            },
-        }
-        # Load-time default PD — captured in init_robot, restored by JNT/EE so
-        # user-changed MIT PD never leaks in.
-        self._arm_kp_default = np.zeros(dof["arm"])
-        self._arm_kd_default = np.zeros(dof["arm"])
-        self._arm_kp_default_phys = np.zeros(dof["arm"])
-        self._arm_kd_default_phys = np.zeros(dof["arm"])
 
         # EE-mode analytic IK (same config as the Mujoco reference).
         self._dyn_util = HexDynUtilY6(
@@ -166,11 +149,6 @@ class HexRobotSimArcherY6(HexRobotSimBase):
 
         if self._has_grip:
             self._deque_dict["grip_cmd"] = deque(maxlen=self._params.state_buffer_size)
-            self._cur_state["grip"] = {
-                "jnt_pos": np.zeros(dof["grip"]),
-                "jnt_vel": np.zeros(dof["grip"]),
-                "jnt_eff": np.zeros(dof["grip"]),
-            }
 
     # ------------------------------------------------------------------
     # init_robot
@@ -201,6 +179,36 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         self._arm_actuator = act_names[0]
         self._grip_actuator = act_names[1] if len(act_names) > 1 else None
         self.logi(f"Actuators: arm={self._arm_actuator}, grip={self._grip_actuator}")
+
+        # 5b. Resolve DOF counts from the spawned articulation (config-driven).
+        arm_act = articulation.actuators[self._arm_actuator]
+        self._dof_dict["arm"] = int(arm_act.num_joints)
+        self._dof_dict["grip"] = (
+            int(articulation.actuators[self._grip_actuator].num_joints)
+            if self._grip_actuator is not None else 0
+        )
+        self.logi(f"DOF from config: arm={self._dof_dict['arm']}, grip={self._dof_dict['grip']}")
+
+        # 5c. Allocate state / PD buffers sized by the resolved DOF.
+        dof = self._dof_dict
+        self._cur_state = {
+            "arm": {
+                "jnt_pos": np.zeros(dof["arm"]),
+                "jnt_vel": np.zeros(dof["arm"]),
+                "jnt_eff": np.zeros(dof["arm"]),
+                "comp_tau": np.zeros(dof["arm"]),  # gravity + Coriolis comp [Nm]
+            },
+        }
+        self._arm_kp_default = np.zeros(dof["arm"])
+        self._arm_kd_default = np.zeros(dof["arm"])
+        self._arm_kp_default_phys = np.zeros(dof["arm"])
+        self._arm_kd_default_phys = np.zeros(dof["arm"])
+        if self._has_grip:
+            self._cur_state["grip"] = {
+                "jnt_pos": np.zeros(dof["grip"]),
+                "jnt_vel": np.zeros(dof["grip"]),
+                "jnt_eff": np.zeros(dof["grip"]),
+            }
 
         # Set Default Kp Kd
         act = articulation.actuators[self._arm_actuator]
@@ -533,17 +541,18 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         jnt_info = grip_ctrl.jnt
         assert self._grip_actuator is not None
 
-        # User command is 1-DOF; replicate to both J1 / J2
+        # User command is 1-DOF; replicate to all grip joints (count from the
+        # USD config, read from dof_dict["grip"]).
         if mode in (HexDcRoboGripCtrlMode.MIT, HexDcRoboGripCtrlMode.JNT):
             pos_v = _grip_val(jnt_info.pos, 0, 0.0)
             ac = ActuatorCmd(
-                position=np.full(_SIM_GRIP_DOF, pos_v, dtype=np.float32))
+                position=np.full(self._dof_dict["grip"], pos_v, dtype=np.float32))
             self._sim_interface.push_command(actuator=self._grip_actuator, cmd=ac)
 
         elif mode == HexDcRoboGripCtrlMode.TAU:
             eff_v = _grip_val(jnt_info.eff, 0, 0.0)
             ac = ActuatorCmd(
-                effort=np.full(_SIM_GRIP_DOF, eff_v, dtype=np.float32))
+                effort=np.full(self._dof_dict["grip"], eff_v, dtype=np.float32))
             self._sim_interface.push_command(actuator=self._grip_actuator, cmd=ac)
 
     # ------------------------------------------------------------------

@@ -131,6 +131,18 @@ class SimInterface(ABC):
         ...
 
     @abstractmethod
+    def get_gravity_coriolis_compensation(self, actuator: str) -> np.ndarray:
+        """Read gravity + Coriolis/centrifugal compensation torques [Nm].
+
+        The sum equals ``C*dq + G`` — the feed-forward torque required to hold
+        the arm against gravity and inertial coupling at the current state.
+
+        Args:
+            actuator: Actuator group name.
+        """
+        ...
+
+    @abstractmethod
     def get_body_pose(self, body_name: str) -> tuple[np.ndarray, np.ndarray]:
         """Read a rigid-body pose in the base frame: (position, quaternion [wxyz]).
 
@@ -151,6 +163,14 @@ class SimInterface(ABC):
     @abstractmethod
     def get_body_pose_world_by_id(self, body_idx: int) -> tuple[np.ndarray, np.ndarray]:
         """Read body pose in world frame by pre-resolved body index."""
+        ...
+
+    @abstractmethod
+    def get_body_pose_relative_by_ids(self, base_body_idx: int,
+                                      target_body_idx: int) -> tuple[np.ndarray, np.ndarray]:
+        """Read target body pose relative to the base body frame:
+        (position [m], quaternion [wxyz]).
+        """
         ...
 
     # ------------------------------------------------------------------

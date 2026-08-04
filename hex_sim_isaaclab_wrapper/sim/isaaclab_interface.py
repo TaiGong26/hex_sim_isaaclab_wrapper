@@ -113,7 +113,7 @@ class IsaacLabSimInterface(SimInterface):
         from isaaclab.scene import InteractiveScene, InteractiveSceneCfg  # noqa: F811
         from isaaclab.utils import configclass  # noqa: F811
 
-        sim_cfg = sim_utils.SimulationCfg(device=device)
+        sim_cfg = sim_utils.SimulationCfg(device=device,)
         self._sim = sim_utils.SimulationContext(sim_cfg)
         self._sim_dt = self._sim.get_physics_dt()
         self._sim.set_camera_view(camera_pos, camera_target)
@@ -203,49 +203,73 @@ class IsaacLabSimInterface(SimInterface):
         torque = articulation.data.applied_torque.clone()
         return torch_to_numpy(torque[0, jids])
 
-    def get_body_pose(self, body_name: str) -> tuple[np.ndarray, np.ndarray]:
-        """Read body pose in the base (root) frame.
-        (imports are cached — eagerly loaded in initialize())
+    def get_gravity_coriolis_compensation(self, actuator: str) -> np.ndarray:
+        """:meth:`SimInterface.get_gravity_coriolis_compensation`.
+
+        PhysX-native: gravity compensation + Coriolis/centrifugal compensation,
+        summed = ``C*dq + G`` for the current articulation state.
         """
         articulation = self._get_articulation()
-        from isaaclab.managers import SceneEntityCfg
-        import isaaclab.utils.math as math_utils
+        jids = articulation.actuators[actuator].joint_indices
+        gravity = articulation.root_physx_view.get_gravity_compensation_forces()
+        coriolis = articulation.root_physx_view.get_coriolis_and_centrifugal_compensation_forces()
+        return torch_to_numpy(gravity[0, jids] + coriolis[0, jids])
 
-        cfg = SceneEntityCfg(self._robot_name, body_names=[body_name])
-        cfg.resolve(self._scene)
-        body_idx = cfg.body_ids[0]
-        body_pose_w = articulation.data.body_pose_w[0, body_idx]
-        root_pose_w = articulation.data.root_pose_w[0]
-
-        pos_b, quat_b = math_utils.subtract_frame_transforms(
-            root_pose_w[:3].unsqueeze(0),
-            root_pose_w[3:7].unsqueeze(0),
-            body_pose_w[:3].unsqueeze(0),
-            body_pose_w[3:7].unsqueeze(0),
-        )
-        return torch_to_numpy(pos_b[0]), torch_to_numpy(quat_b[0])
-
-    def get_body_pose_world(self, body_name: str) -> tuple[np.ndarray, np.ndarray]:
-        """Read body pose in the world frame."""
+    def _resolve_body_idx(self, body_name: str) -> int:
+        """Resolve a body name to its index in the articulation's body array."""
         self._require_scene_ready()
         from isaaclab.managers import SceneEntityCfg
 
         cfg = SceneEntityCfg(self._robot_name, body_names=[body_name])
         cfg.resolve(self._scene)
-        body_idx = cfg.body_ids[0]
-        return self.get_body_pose_world_by_id(body_idx)
+        return cfg.body_ids[0]
+
+    def _body_pose_world(self, body_idx: int):
+        """World pose ``[pos(3), quat_wxyz(4)]`` of a body, shape ``(7,)``."""
+        articulation = self._get_articulation()
+        return articulation.data.body_pose_w[0, body_idx]
+
+    def _relative_pose(self, base_pose_w, target_pose_w) -> tuple[np.ndarray, np.ndarray]:
+        """Express ``target_pose_w`` relative to ``base_pose_w`` → (pos, quat wxyz)."""
+        import isaaclab.utils.math as math_utils
+
+        pos_b, quat_b = math_utils.subtract_frame_transforms(
+            base_pose_w[:3].unsqueeze(0),
+            base_pose_w[3:7].unsqueeze(0),
+            target_pose_w[:3].unsqueeze(0),
+            target_pose_w[3:7].unsqueeze(0),
+        )
+        return torch_to_numpy(pos_b[0]), torch_to_numpy(quat_b[0])
+
+    def get_body_pose(self, body_name: str) -> tuple[np.ndarray, np.ndarray]:
+        """Read body pose in the base (root) frame."""
+        body_idx = self._resolve_body_idx(body_name)
+        articulation = self._get_articulation()
+        return self._relative_pose(articulation.data.root_pose_w[0],
+                                   self._body_pose_world(body_idx))
+
+    def get_body_pose_world(self, body_name: str) -> tuple[np.ndarray, np.ndarray]:
+        """Read body pose in the world frame."""
+        return self.get_body_pose_world_by_id(self._resolve_body_idx(body_name))
 
     def get_body_pose_world_by_id(self, body_idx: int) -> tuple[np.ndarray, np.ndarray]:
         """Read body pose in world frame by pre-resolved body index."""
-        articulation = self._get_articulation()
-        body_pose_w = articulation.data.body_pose_w[0, body_idx]
+        body_pose_w = self._body_pose_world(body_idx)
         return torch_to_numpy(body_pose_w[:3]), torch_to_numpy(body_pose_w[3:7])
 
+    def get_body_pose_relative_by_ids(self, base_body_idx: int,
+                                      target_body_idx: int) -> tuple[np.ndarray, np.ndarray]:
+        """Read target body pose relative to the base body frame (base → target)."""
+        return self._relative_pose(self._body_pose_world(base_body_idx),
+                                   self._body_pose_world(target_body_idx))
+
     def get_root_pose(self) -> tuple[np.ndarray, np.ndarray]:
+        """Read the root (base) pose: (position [m], quaternion [wxyz])."""
         articulation = self._get_articulation()
         root_pose = articulation.data.root_pose_w[0]
         return torch_to_numpy(root_pose[:3]), torch_to_numpy(root_pose[3:7])
 
+    
     # ------------------------------------------------------------------
     # Command writing  ← numpy
     # ------------------------------------------------------------------
@@ -281,7 +305,7 @@ class IsaacLabSimInterface(SimInterface):
                 t = numpy_to_torch(cmd.effort, self._device).unsqueeze(0)
                 articulation.set_joint_effort_target(t, joint_ids=jids)
 
-            # Stiffness / damping — dual path (actuator model + PhysX)
+            # Stiffness / damping — dual path (motor model + PhysX)
             if cmd.stiffness is not None or cmd.damping is not None:
                 kp = (numpy_to_torch(cmd.stiffness, self._device)
                       if cmd.stiffness is not None

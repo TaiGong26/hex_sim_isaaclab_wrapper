@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 import numpy as np
+from hex_util_ros import HexDynUtilY6, interp_joint
 
 from hex_util_msg.dataclass import (
     HexDcBaseJntState,
@@ -44,9 +45,14 @@ _GRIP_TO_USD: dict[str, str] = {
     "gp100": "HEX_ISAAC_USD_ARCHER_Y6_GR100_CFG",
 }
 
-# Sim USD always has 2 grip joints (J1, J2). User commands 1-DOF values;
-# we replicate to both joints internally.
-_SIM_GRIP_DOF = 2
+# JNT/EE position-interpolation default max joint velocity [rad/s], used when
+# the command omits ``lim_vel`` (mirrors hex_driver_robot's default).
+_ARM_LIM_VEL_DEFAULT = 5.0
+
+# Per-arm pose link names (resolved in init_robot). The base link is the arm's
+# first link frame; the EE link is the last link of the arm chain.
+_ARM_BASE_LINK = "base_link"
+_ARM_EE_LINK = "link_6"
 
 
 # ---------------------------------------------------------------------------
@@ -57,6 +63,8 @@ _SIM_GRIP_DOF = 2
 class HexRobotSimArcherY6Params(HexRobotSimParams):
     """Parameters for simulated Archer Y6 (no hardware concepts)."""
     grip_type: str = "gp80"       # "gp80", "gr100", "empty"
+    # URDF for EE-mode analytic IK (HexDynUtilY6); None disables EE/IK.
+    urdf_path: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -101,13 +109,15 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         self._deque_dict: dict[str, Optional[deque]] = {}
         self._cur_cmd: dict[str, Optional[Any]] = {}
         self._cur_state: dict[str, Optional[dict]] = {}
+        self._dyn_util: Optional[HexDynUtilY6] = None  # built in init_vars if urdf set
 
         # Actuator names — resolved from articulation at spawn time
         self._arm_actuator: str = ""
         self._grip_actuator: Optional[str] = None
 
-        # Cached EE body index (resolved in init_robot)
-        self._ee_body_id: int = -1
+        # Per-arm body indices (resolved in init_robot): arm name →
+        # (base_body_id, ee_body_id). Single-entry for now; dual-arm ready.
+        self._arm_refs: dict[str, tuple[int, int]] = {}
 
         # Default joint pos (home)
         self._default_joint_pos: Optional[np.ndarray] = None
@@ -117,29 +127,28 @@ class HexRobotSimArcherY6(HexRobotSimBase):
     # ------------------------------------------------------------------
 
     def init_vars(self) -> None:
-        dof = self._dof_dict
-        dof["arm"] = 6
-        dof["grip"] = _SIM_GRIP_DOF if self._has_grip else 0
+        """Non-DOF-dependent init.
 
+        DOF counts and the state/PD buffers sized by them are resolved in
+        init_robot(), after the USD config is loaded — dof_dict comes from the
+        config's actuators. ``_cur_state`` stays ``{}`` until then.
+        """
         self._deque_dict = {
             "arm_cmd": deque(maxlen=self._params.state_buffer_size),
         }
         self._cur_cmd = {"arm_cmd": None, "grip_cmd": None}
 
-        self._cur_state = {
-            "arm": {
-                "jnt_pos": np.zeros(dof["arm"]),
-                "jnt_vel": np.zeros(dof["arm"]),
-                "jnt_eff": np.zeros(dof["arm"]),
-            },
-        }
+        # EE-mode analytic IK (same config as the Mujoco reference); disabled
+        # when no URDF is configured (urdf_path=None → EE commands are skipped).
+        if self._params.urdf_path is not None:
+            self._dyn_util = HexDynUtilY6(
+                model_path=self._params.urdf_path,
+                last_link="link_6",
+                pose_end_in_flange=np.array([0.187, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]),
+            )
+
         if self._has_grip:
             self._deque_dict["grip_cmd"] = deque(maxlen=self._params.state_buffer_size)
-            self._cur_state["grip"] = {
-                "jnt_pos": np.zeros(dof["grip"]),
-                "jnt_vel": np.zeros(dof["grip"]),
-                "jnt_eff": np.zeros(dof["grip"]),
-            }
 
     # ------------------------------------------------------------------
     # init_robot
@@ -156,26 +165,72 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         self._sim_interface = sim
 
         # 2. Now safe to import articulation configs (AppLauncher active)
-        cfg = _import_articulation_cfg(self._params.grip_type)
+        articulation_cfg = _import_articulation_cfg(self._params.grip_type)
 
         # 3. Spawn robot (builds scene)
-        sim.spawn_robot("archer_y6", cfg)
+        sim.spawn_robot("archer_y6", articulation_cfg)
 
         # 4. Step once to populate articulation data buffers
         sim.step()
 
         # 5. Resolve actuator names from the spawned articulation
         articulation = sim._scene["archer_y6"]
-        act_names = list(articulation.actuators.keys())
-        self._arm_actuator = act_names[0]
-        self._grip_actuator = act_names[1] if len(act_names) > 1 else None
+        actuator_names = list(articulation.actuators.keys())
+        self._arm_actuator = actuator_names[0]
+        self._grip_actuator = actuator_names[1] if len(actuator_names) > 1 else None
         self.logi(f"Actuators: arm={self._arm_actuator}, grip={self._grip_actuator}")
 
-        # 6. Resolve EE body index for state FK
+        # 5b. Resolve DOF counts from the spawned articulation (config-driven).
+        arm_actuator_cfg = articulation.actuators[self._arm_actuator]
+        self._dof_dict["arm"] = int(arm_actuator_cfg.num_joints)
+        self._dof_dict["grip"] = (
+            int(articulation.actuators[self._grip_actuator].num_joints)
+            if self._grip_actuator is not None else 0
+        )
+        self.logi(f"DOF from config: arm={self._dof_dict['arm']}, grip={self._dof_dict['grip']}")
+
+        # 5c. Allocate state / PD buffers sized by the resolved DOF.
+        dof = self._dof_dict
+        self._cur_state = {
+            "arm": {
+                "jnt_pos": np.zeros(dof["arm"]),
+                "jnt_vel": np.zeros(dof["arm"]),
+                "jnt_eff": np.zeros(dof["arm"]),
+                "comp_tau": np.zeros(dof["arm"]),  # gravity + Coriolis comp [Nm]
+            },
+        }
+        self._arm_kp_default = np.zeros(dof["arm"])
+        self._arm_kd_default = np.zeros(dof["arm"])
+        self._arm_kp_default_phys = np.zeros(dof["arm"])
+        self._arm_kd_default_phys = np.zeros(dof["arm"])
+        if self._has_grip:
+            self._cur_state["grip"] = {
+                "jnt_pos": np.zeros(dof["grip"]),
+                "jnt_vel": np.zeros(dof["grip"]),
+                "jnt_eff": np.zeros(dof["grip"]),
+            }
+
+        # Set Default Kp Kd
+        arm_actuator_cfg = articulation.actuators[self._arm_actuator]
+        self._arm_kp_default = torch_to_numpy(arm_actuator_cfg.stiffness[0]).copy()
+        self._arm_kd_default = torch_to_numpy(arm_actuator_cfg.damping[0]).copy()
+        joint_indices = arm_actuator_cfg.joint_indices
+        self._arm_kp_default_phys = torch_to_numpy(
+            articulation.data.default_joint_stiffness[0, joint_indices]).copy()
+        self._arm_kd_default_phys = torch_to_numpy(
+            articulation.data.default_joint_damping[0, joint_indices]).copy()
+        self.logi(
+            f"Arm default PD (motor model): kp={self._arm_kp_default.tolist()}, "
+            f"kd={self._arm_kd_default.tolist()}")
+
+        # 6. Resolve per-arm base/EE body indices for state FK
+        ### HACK: Temporary solution. A better approach will be needed later to handle the end-effector IK/solver issue.
         from isaaclab.managers import SceneEntityCfg
-        ee_cfg = SceneEntityCfg("archer_y6", body_names=["link_6"])
-        ee_cfg.resolve(sim._scene)
-        self._ee_body_id = ee_cfg.body_ids[0]
+        base_body_cfg = SceneEntityCfg("archer_y6", body_names=[_ARM_BASE_LINK])
+        base_body_cfg.resolve(sim._scene)
+        ee_body_cfg = SceneEntityCfg("archer_y6", body_names=[_ARM_EE_LINK])
+        ee_body_cfg.resolve(sim._scene)
+        self._arm_refs["arm"] = (base_body_cfg.body_ids[0], ee_body_cfg.body_ids[0])
 
         # 7. Store default joint positions (home)
         self._default_joint_pos = torch_to_numpy(articulation.data.default_joint_pos[0])
@@ -259,6 +314,9 @@ class HexRobotSimArcherY6(HexRobotSimBase):
                 jnt=build_hex_jnt(
                     pos=np.asarray(cmd_dict["jnt_pos"]),
                     eff=np.asarray(cmd_dict.get("jnt_eff", np.zeros(dof))),
+                    lim_vel=np.asarray(cmd_dict.get(
+                        "lim_vel", np.full(dof, _ARM_LIM_VEL_DEFAULT))),
+                    lim_acc=np.asarray(cmd_dict.get("lim_acc", np.zeros(dof))),
                     dof=dof,
                 ),
             ),
@@ -283,6 +341,9 @@ class HexRobotSimArcherY6(HexRobotSimBase):
                 grav=cmd_dict.get("grav"),
                 jnt=build_hex_jnt(
                     eff=np.asarray(cmd_dict.get("jnt_eff", np.zeros(dof))),
+                    lim_vel=np.asarray(cmd_dict.get(
+                        "lim_vel", np.full(dof, _ARM_LIM_VEL_DEFAULT))),
+                    lim_acc=np.asarray(cmd_dict.get("lim_acc", np.zeros(dof))),
                     dof=dof,
                 ),
                 pose=build_pose(pose_pos, pose_quat),
@@ -308,7 +369,7 @@ class HexRobotSimArcherY6(HexRobotSimBase):
                     eff=cmd_dict.get("mit_tau"),
                     kp=cmd_dict.get("mit_kp"),
                     kd=cmd_dict.get("mit_kd"),
-                    dof=1,  # user-facing DOF
+                    dof=self._dof_dict["grip"],  # user-facing DOF
                 ),
             ),
         )
@@ -330,7 +391,7 @@ class HexRobotSimArcherY6(HexRobotSimBase):
                 jnt=build_hex_jnt(
                     pos=np.atleast_1d(np.asarray(cmd_dict.get("jnt_pos", [0.0]))),
                     eff=np.atleast_1d(np.asarray(cmd_dict.get("jnt_eff", 3.0))),
-                    dof=1,
+                    dof=self._dof_dict["grip"],
                 ),
             ),
         )
@@ -351,7 +412,7 @@ class HexRobotSimArcherY6(HexRobotSimBase):
                 ctrl_mode=HexDcRoboGripCtrlMode.TAU,
                 jnt=build_hex_jnt(
                     eff=np.atleast_1d(np.asarray(cmd_dict["jnt_eff"])),
-                    dof=1,
+                    dof=self._dof_dict["grip"],
                 ),
             ),
         )
@@ -375,12 +436,38 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         """Return dict with 'arm' and 'grip' DOF counts."""
         return dict(self._dof_dict)
 
+    def get_arm_ee_pose(self, arm_name: str = "arm") -> Optional[tuple[np.ndarray, np.ndarray]]:
+        """Return ``(pos, quat)`` of an arm's EE relative to its baselink, or None.
+
+        ``arm_name`` defaults to ``"arm"`` for the single-arm robot; the dict
+        lookup is ready for future dual-arm names. Returns ``None`` if the arm
+        is unknown or the sim interface is not yet initialized.
+        """
+        refs = self._arm_refs.get(arm_name)
+        if refs is None or self._sim_interface is None:
+            return None
+        base_id, ee_id = refs
+        return self._sim_interface.get_body_pose_relative_by_ids(base_id, ee_id)
+
     # ------------------------------------------------------------------
     # Internal — command processing (work thread context)
     # ------------------------------------------------------------------
 
     def _process_arm_cmd(self) -> None:
-        """Convert latest arm command to ActuatorCmd and push to sim."""
+        """Convert latest arm command to ActuatorCmd and push to sim.
+
+        All three modes push a **full MIT-form** command; only the position
+        target and PD source differ:
+
+        - MIT: user pos/kp/kd/vel passed through unchanged (no interpolation).
+        - JNT: commanded position first ``interp_joint``-interpolated toward
+          the target, then the **load-time default PD** is restored.
+        - EE: pose command resolved by analytic IK (requires ``urdf_path``),
+          then the same interpolation + default PD as JNT.
+
+        Gravity/Coriolis compensation is **ADDed** to effort in every mode
+        (mirrors mujoco's ``+ __cur_comp`` in all three branches).
+        """
         temp = deque_helper(self._deque_dict["arm_cmd"], latest=True)
         if temp is not None:
             self._cur_cmd["arm_cmd"] = temp
@@ -394,34 +481,81 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         jnt_info = arm_ctrl.jnt
         dof = self._dof_dict["arm"]
 
-        ac = ActuatorCmd()
+        _arm_actuator_cmd = ActuatorCmd()
+
+        # ---- common: compensation ADDed to effort in all modes ----
+        comp = self._cur_state["arm"]["comp_tau"]
+        eff = (np.asarray(jnt_info.eff, dtype=np.float32)
+               if jnt_info.eff is not None and jnt_info.eff.size == dof
+               else np.zeros(dof, dtype=np.float32))
+        _arm_actuator_cmd.effort = eff + comp
 
         if mode == HexDcRoboArmCtrlMode.MIT:
             if jnt_info.pos is not None and jnt_info.pos.size == dof:
-                ac.position = np.asarray(jnt_info.pos, dtype=np.float32)
+                _arm_actuator_cmd.position = np.asarray(jnt_info.pos, dtype=np.float32)
             if jnt_info.kp is not None and jnt_info.kp.size == dof:
-                ac.stiffness = np.asarray(jnt_info.kp, dtype=np.float32)
+                _arm_actuator_cmd.stiffness = np.asarray(jnt_info.kp, dtype=np.float32)
             if jnt_info.kd is not None and jnt_info.kd.size == dof:
-                ac.damping = np.asarray(jnt_info.kd, dtype=np.float32)
+                _arm_actuator_cmd.damping = np.asarray(jnt_info.kd, dtype=np.float32)
             if jnt_info.vel is not None and jnt_info.vel.size == dof:
-                ac.velocity = np.asarray(jnt_info.vel, dtype=np.float32)
-            if jnt_info.eff is not None and jnt_info.eff.size == dof:
-                ac.effort = np.asarray(jnt_info.eff, dtype=np.float32)
+                _arm_actuator_cmd.velocity = np.asarray(jnt_info.vel, dtype=np.float32)
 
         elif mode == HexDcRoboArmCtrlMode.JNT:
-            if jnt_info.pos is not None and jnt_info.pos.size == dof:
-                ac.position = np.asarray(jnt_info.pos, dtype=np.float32)
-            if jnt_info.eff is not None and jnt_info.eff.size == dof:
-                ac.effort = np.asarray(jnt_info.eff, dtype=np.float32)
+            if jnt_info.pos is None or jnt_info.pos.size != dof:
+                self.logw("JNT command without pos target — skipped")
+                return
+            self._set_position_interp_command(
+                _arm_actuator_cmd, np.asarray(jnt_info.pos, dtype=np.float32), jnt_info, dof)
 
         elif mode == HexDcRoboArmCtrlMode.EE:
-            # TODO: IK — compute position target from ee pose, then push_command
-            pass
+            if self._dyn_util is None:
+                self.logw("EE mode requires a URDF (urdf_path=None) — "
+                          "cannot solve IK, command skipped")
+                return
+            ik_success, tar_pos = self._ik_target(arm_ctrl)
+            if not ik_success:
+                self.logw("EE IK failed — command skipped")
+                return
+            self._set_position_interp_command(
+                _arm_actuator_cmd, np.asarray(tar_pos, dtype=np.float32), jnt_info, dof)
 
         # Push only if at least one field was set
         if any(v is not None for v in
-               [ac.position, ac.velocity, ac.effort, ac.stiffness, ac.damping]):
-            self._sim_interface.push_command(actuator=self._arm_actuator, cmd=ac)
+               [_arm_actuator_cmd.position, _arm_actuator_cmd.velocity, _arm_actuator_cmd.effort, _arm_actuator_cmd.stiffness, _arm_actuator_cmd.damping]):
+            self._sim_interface.push_command(actuator=self._arm_actuator, cmd=_arm_actuator_cmd)
+
+    def _ik_target(self, arm_ctrl) -> tuple[bool, np.ndarray]:
+        """Run analytic IK on an EE pose command → (success, target positions).
+
+        Same call as the Mujoco reference (``HexDynUtilY6``, wxyz quaternion).
+        """
+        pose = arm_ctrl.pose
+        pos = np.array([pose.position.x, pose.position.y, pose.position.z])
+        ori = np.array([pose.orientation.w, pose.orientation.x,
+                        pose.orientation.y, pose.orientation.z])
+        cur_pos = self._cur_state["arm"]["jnt_pos"]
+        return self._dyn_util.inverse_kinematics_analytic((pos, ori), cur_pos)
+
+    def _set_position_interp_command(
+        self, actuator_cmd: ActuatorCmd, target_pos: np.ndarray, jnt_info, dof: int
+    ) -> None:
+        """Interpolate toward ``target_pos`` and restore load-time default PD.
+
+        Shared by the JNT and EE branches: commanded position is first
+        ``interp_joint``-limited toward the target, then the load-time default
+        stiffness/damping are applied (mirrors mujoco JNT behavior).
+        """
+        current_pos = self._cur_state["arm"]["jnt_pos"]
+        lim_vel = (np.asarray(jnt_info.lim_vel, dtype=np.float32)
+                   if jnt_info.lim_vel is not None
+                   and jnt_info.lim_vel.size == dof
+                   else np.full(dof, _ARM_LIM_VEL_DEFAULT, dtype=np.float32))
+        err_limit = lim_vel * (1.0 / self._params.ctrl_rate)
+
+        actuator_cmd.position = interp_joint(current_pos, target_pos, err_limit).astype(np.float32)
+        actuator_cmd.stiffness = self._arm_kp_default.astype(np.float32)
+        actuator_cmd.damping = self._arm_kd_default.astype(np.float32)
+        actuator_cmd.velocity = np.zeros(dof, dtype=np.float32)  # mujoco JNT vel term = 0
 
     def _process_grip_cmd(self) -> None:
         """Convert latest grip command to ActuatorCmd and push to sim."""
@@ -438,18 +572,25 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         jnt_info = grip_ctrl.jnt
         assert self._grip_actuator is not None
 
-        # User command is 1-DOF; replicate to both J1 / J2
-        if mode in (HexDcRoboGripCtrlMode.MIT, HexDcRoboGripCtrlMode.JNT):
+        # User command is 1-DOF; replicate to all grip joints (count from the
+        # USD config, read from dof_dict["grip"]).
+        if mode == HexDcRoboGripCtrlMode.MIT:
             pos_v = _grip_val(jnt_info.pos, 0, 0.0)
-            ac = ActuatorCmd(
-                position=np.full(_SIM_GRIP_DOF, pos_v, dtype=np.float32))
-            self._sim_interface.push_command(actuator=self._grip_actuator, cmd=ac)
+            _grip_actuator_cmd = ActuatorCmd(
+                position=np.full(self._dof_dict["grip"], pos_v, dtype=np.float32))
+            self._sim_interface.push_command(actuator=self._grip_actuator, cmd=_grip_actuator_cmd)
+
+        elif mode == HexDcRoboGripCtrlMode.JNT:
+            pos_v = _grip_val(jnt_info.pos, 0, 0.0)
+            _grip_actuator_cmd = ActuatorCmd(
+                position=np.full(self._dof_dict["grip"], pos_v, dtype=np.float32))
+            self._sim_interface.push_command(actuator=self._grip_actuator, cmd=_grip_actuator_cmd)
 
         elif mode == HexDcRoboGripCtrlMode.TAU:
             eff_v = _grip_val(jnt_info.eff, 0, 0.0)
-            ac = ActuatorCmd(
-                effort=np.full(_SIM_GRIP_DOF, eff_v, dtype=np.float32))
-            self._sim_interface.push_command(actuator=self._grip_actuator, cmd=ac)
+            _grip_actuator_cmd = ActuatorCmd(
+                effort=np.full(self._dof_dict["grip"], eff_v, dtype=np.float32))
+            self._sim_interface.push_command(actuator=self._grip_actuator, cmd=_grip_actuator_cmd)
 
     # ------------------------------------------------------------------
     # Internal — state update and publish (work thread context)
@@ -467,15 +608,19 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         self._cur_state["arm"]["jnt_vel"][:] = vel
         self._cur_state["arm"]["jnt_eff"][:] = eff
 
-        # TODO: FK
-
-        # EE pose from sim FK (use cached body ID)
-        ee_pos, ee_quat = sim.get_body_pose_world_by_id(self._ee_body_id)
+        # Gravity/Coriolis compensation for the current state (one-step delay,
+        # same as mujoco — computed from the state just read, applied next step).
+        self._cur_state["arm"]["comp_tau"][:] = (
+            sim.get_gravity_coriolis_compensation(self._arm_actuator))
+    
+        # EE pose relative to the arm's baselink (per-arm pose, dual-arm-ready)
+        base_id, ee_id = self._arm_refs["arm"]
+        ee_pos, ee_quat = sim.get_body_pose_relative_by_ids(base_id, ee_id)
 
         state_msg = HexDcRoboArmStateStamped(
             header=build_header(),
             arm_state=HexDcRoboArmState(
-                jnt=HexDcBaseJntState(position=pos.copy(), velocity=vel.copy(), effort=eff),
+                jnt=HexDcBaseJntState(position=pos.copy(), velocity=vel.copy(), effort=eff.copy()),
                 pose=build_pose(ee_pos, ee_quat),
             ),
         )
@@ -497,11 +642,10 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         state_msg = HexDcRoboGripStateStamped(
             header=build_header(),
             grip_state=HexDcRoboGripState(
-                jnt=HexDcBaseJntState(position=pos, velocity=vel, effort=eff),
+                jnt=HexDcBaseJntState(position=pos.copy(), velocity=vel.copy(), effort=eff.copy()),
             ),
         )
         self._callbacks["grip_state"](state_msg)
-
 
 # ---------------------------------------------------------------------------
 # Module-level helpers  (deferred import to respect AppLauncher constraint)

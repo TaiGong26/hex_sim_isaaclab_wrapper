@@ -66,16 +66,16 @@ def main():
         #     "target": target,
         # })
 
-        # robot.set_arm_pos_cmd({
-        #     "jnt_pos": target,
-        #     "lim_vel": np.full(6, 100.0),   # smooth interpolated trajectory
-        # })
-        
-        robot.set_arm_pose_cmd({
-            "pose_pos": tar_pos,
-            "pose_quat": np.asarray([1.0,0.0,0.0,0.0]),   # smooth interpolated trajectory
-            "lim_vel": np.full(6, 100.0)
+        robot.set_arm_pos_cmd({
+            "jnt_pos": target,
+            "lim_vel": np.full(6, 10.0),   # smooth interpolated trajectory
         })
+        
+        # robot.set_arm_pose_cmd({
+        #     "pose_pos": tar_pos,
+        #     "pose_quat": np.asarray([1.0,0.0,0.0,0.0]),   # smooth interpolated trajectory
+        #     "lim_vel": np.full(6, 100.0)
+        # })
         
         robot.set_grip_pos_cmd({"jnt_pos": tau})
 

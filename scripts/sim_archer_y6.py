@@ -31,7 +31,7 @@ def main():
         grip_type="gr100",
         ctrl_rate = 1000.0,
         device = "cpu",
-        urdf_path = "/home/hexfellow/ttg/model/urdf/xpkg_urdf_archer_y6/urdf/xpkg_urdf_archer_y6.urdf",
+        urdf_path = None,
     )
 
     robot = HexRobotSimArcherY6(params)

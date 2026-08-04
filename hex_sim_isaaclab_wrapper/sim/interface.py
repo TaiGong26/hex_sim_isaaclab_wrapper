@@ -165,6 +165,14 @@ class SimInterface(ABC):
         """Read body pose in world frame by pre-resolved body index."""
         ...
 
+    @abstractmethod
+    def get_body_pose_relative_by_ids(self, base_body_idx: int,
+                                      target_body_idx: int) -> tuple[np.ndarray, np.ndarray]:
+        """Read target body pose relative to the base body frame:
+        (position [m], quaternion [wxyz]).
+        """
+        ...
+
     # ------------------------------------------------------------------
     # Command writing  (numpy in)  —  unified via ActuatorCmd
     # ------------------------------------------------------------------

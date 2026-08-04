@@ -49,6 +49,11 @@ _GRIP_TO_USD: dict[str, str] = {
 # the command omits ``lim_vel`` (mirrors hex_driver_robot's default).
 _ARM_LIM_VEL_DEFAULT = 5.0
 
+# Per-arm pose link names (resolved in init_robot). The base link is the arm's
+# first link frame; the EE link is the last link of the arm chain.
+_ARM_BASE_LINK = "base_link"
+_ARM_EE_LINK = "link_6"
+
 
 # ---------------------------------------------------------------------------
 # Params
@@ -110,8 +115,9 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         self._arm_actuator: str = ""
         self._grip_actuator: Optional[str] = None
 
-        # Cached EE body index (resolved in init_robot)
-        self._ee_body_id: int = -1
+        # Per-arm body indices (resolved in init_robot): arm name →
+        # (base_body_id, ee_body_id). Single-entry for now; dual-arm ready.
+        self._arm_refs: dict[str, tuple[int, int]] = {}
 
         # Default joint pos (home)
         self._default_joint_pos: Optional[np.ndarray] = None
@@ -217,11 +223,14 @@ class HexRobotSimArcherY6(HexRobotSimBase):
             f"Arm default PD (motor model): kp={self._arm_kp_default.tolist()}, "
             f"kd={self._arm_kd_default.tolist()}")
 
-        # 6. Resolve EE body index for state FK
+        # 6. Resolve per-arm base/EE body indices for state FK
+        ### HACK: Temporary solution. A better approach will be needed later to handle the end-effector IK/solver issue.
         from isaaclab.managers import SceneEntityCfg
-        ee_body_cfg = SceneEntityCfg("archer_y6", body_names=["link_6"])
+        base_body_cfg = SceneEntityCfg("archer_y6", body_names=[_ARM_BASE_LINK])
+        base_body_cfg.resolve(sim._scene)
+        ee_body_cfg = SceneEntityCfg("archer_y6", body_names=[_ARM_EE_LINK])
         ee_body_cfg.resolve(sim._scene)
-        self._ee_body_id = ee_body_cfg.body_ids[0]
+        self._arm_refs["arm"] = (base_body_cfg.body_ids[0], ee_body_cfg.body_ids[0])
 
         # 7. Store default joint positions (home)
         self._default_joint_pos = torch_to_numpy(articulation.data.default_joint_pos[0])
@@ -427,6 +436,19 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         """Return dict with 'arm' and 'grip' DOF counts."""
         return dict(self._dof_dict)
 
+    def get_arm_ee_pose(self, arm_name: str = "arm") -> Optional[tuple[np.ndarray, np.ndarray]]:
+        """Return ``(pos, quat)`` of an arm's EE relative to its baselink, or None.
+
+        ``arm_name`` defaults to ``"arm"`` for the single-arm robot; the dict
+        lookup is ready for future dual-arm names. Returns ``None`` if the arm
+        is unknown or the sim interface is not yet initialized.
+        """
+        refs = self._arm_refs.get(arm_name)
+        if refs is None or self._sim_interface is None:
+            return None
+        base_id, ee_id = refs
+        return self._sim_interface.get_body_pose_relative_by_ids(base_id, ee_id)
+
     # ------------------------------------------------------------------
     # Internal — command processing (work thread context)
     # ------------------------------------------------------------------
@@ -591,8 +613,9 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         self._cur_state["arm"]["comp_tau"][:] = (
             sim.get_gravity_coriolis_compensation(self._arm_actuator))
     
-        # EE pose from sim FK
-        ee_pos, ee_quat = sim.get_body_pose_world_by_id(self._ee_body_id)
+        # EE pose relative to the arm's baselink (per-arm pose, dual-arm-ready)
+        base_id, ee_id = self._arm_refs["arm"]
+        ee_pos, ee_quat = sim.get_body_pose_relative_by_ids(base_id, ee_id)
 
         state_msg = HexDcRoboArmStateStamped(
             header=build_header(),

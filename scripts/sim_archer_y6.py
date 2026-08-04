@@ -29,7 +29,9 @@ def main():
         headless=args.headless,
         num_envs=1,
         grip_type="gr100",
-        ctrl_rate = 100.0
+        ctrl_rate = 1000.0,
+        device = "cpu",
+        urdf_path = "/home/hexfellow/ttg/model/urdf/xpkg_urdf_archer_y6/urdf/xpkg_urdf_archer_y6.urdf",
     )
 
     robot = HexRobotSimArcherY6(params)
@@ -57,21 +59,23 @@ def main():
         else:
             count = 0
 
-        robot.set_arm_mit_cmd({
-            "mit_kp": np.full(6, 0.0),
-            "mit_kd": np.full(6, 0.0),
-            "target": target,
-        })
+        ##### If you want to drag the arm, you should use CPU instead of CUDA.
+        # robot.set_arm_mit_cmd({
+        #     "mit_kp": np.full(6, 0.0),
+        #     "mit_kd": np.full(6, 0.0),
+        #     "target": target,
+        # })
 
         # robot.set_arm_pos_cmd({
         #     "jnt_pos": target,
         #     "lim_vel": np.full(6, 100.0),   # smooth interpolated trajectory
         # })
-        # robot.set_arm_pose_cmd({
-        #     "pose_pos": tar_pos,
-        #     "pose_quat": np.asarray([1.0,0.0,0.0,0.0]),   # smooth interpolated trajectory
-        #     "lim_vel": np.full(6, 100.0)
-        # })
+        
+        robot.set_arm_pose_cmd({
+            "pose_pos": tar_pos,
+            "pose_quat": np.asarray([1.0,0.0,0.0,0.0]),   # smooth interpolated trajectory
+            "lim_vel": np.full(6, 100.0)
+        })
         
         robot.set_grip_pos_cmd({"jnt_pos": tau})
 
@@ -81,8 +85,13 @@ def main():
         grip_state = robot.get_grip_state()
         
         if arm_state is not None and total % 50 == 0:
-            print(f"[arm] {total}: pos={np.round(arm_state.arm_state.jnt.position, 3)}",
-                  flush=True)
+            # print(f"[arm] {total}: pos={np.round(arm_state.arm_state.jnt.position, 3)}",
+            #       flush=True)
+            print(f"[arm] ee: pos={arm_state.arm_state.pose.position}",flush=True)
+            
+        # if grip_state is not None and total % 50 == 0:
+        #             print(f"[grip] {total}: pos={np.round(grip_state.grip_state.jnt.position, 3)}",
+        #                   flush=True)
 
         count += 1
         time.sleep(1.0 / params.ctrl_rate)

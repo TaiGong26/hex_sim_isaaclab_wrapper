@@ -113,7 +113,7 @@ class IsaacLabSimInterface(SimInterface):
         from isaaclab.scene import InteractiveScene, InteractiveSceneCfg  # noqa: F811
         from isaaclab.utils import configclass  # noqa: F811
 
-        sim_cfg = sim_utils.SimulationCfg(device=device)
+        sim_cfg = sim_utils.SimulationCfg(device=device,)
         self._sim = sim_utils.SimulationContext(sim_cfg)
         self._sim_dt = self._sim.get_physics_dt()
         self._sim.set_camera_view(camera_pos, camera_target)
@@ -293,7 +293,7 @@ class IsaacLabSimInterface(SimInterface):
                 t = numpy_to_torch(cmd.effort, self._device).unsqueeze(0)
                 articulation.set_joint_effort_target(t, joint_ids=jids)
 
-            # Stiffness / damping — dual path (actuator model + PhysX)
+            # Stiffness / damping — dual path (motor model + PhysX)
             if cmd.stiffness is not None or cmd.damping is not None:
                 kp = (numpy_to_torch(cmd.stiffness, self._device)
                       if cmd.stiffness is not None

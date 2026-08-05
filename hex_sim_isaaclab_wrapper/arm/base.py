@@ -61,9 +61,9 @@ class HexRobotSimParams:
     """
     ctrl_rate: float = 500.0
     state_buffer_size: int = 100
-    num_envs: int = 1
-    device: str = "cuda:0"
-    headless: bool = False
+    sim_num_envs: int = 1
+    torch_device: str = "cuda:0"
+    isaac_headless: bool = False
 
     # Additional CLI args forwarded to Isaac Lab's AppLauncher.
     # This allows users to pass custom flags without touching our API.

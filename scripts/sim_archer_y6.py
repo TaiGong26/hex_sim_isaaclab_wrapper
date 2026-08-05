@@ -26,11 +26,10 @@ def main():
 
     # Configure simulation parameters here
     params = HexRobotSimArcherY6Params(
-        headless=args.headless,
-        num_envs=1,
+        isaac_headless=args.headless,
         grip_type="gr100",
-        ctrl_rate = 1000.0,
-        device = "cpu",
+        ctrl_rate = 500.0,
+        torch_device = "cuda:0",
         urdf_path = None,
     )
 
@@ -60,16 +59,16 @@ def main():
             count = 0
 
         ##### If you want to drag the arm, you should use CPU instead of CUDA.
-        # robot.set_arm_mit_cmd({
-        #     "mit_kp": np.full(6, 0.0),
-        #     "mit_kd": np.full(6, 0.0),
-        #     "target": target,
-        # })
-
-        robot.set_arm_pos_cmd({
-            "jnt_pos": target,
-            "lim_vel": np.full(6, 10.0),   # smooth interpolated trajectory
+        robot.set_arm_mit_cmd({
+            "mit_kp": np.full(6, 0.0),
+            "mit_kd": np.full(6, 0.0),
+            "target": target,
         })
+
+        # robot.set_arm_pos_cmd({
+        #     "jnt_pos": target,
+        #     "lim_vel": np.full(6, 100.0),   # smooth interpolated trajectory
+        # })
         
         # robot.set_arm_pose_cmd({
         #     "pose_pos": tar_pos,
@@ -81,8 +80,8 @@ def main():
 
         robot.step()
 
-        arm_state = robot.get_arm_state()
-        grip_state = robot.get_grip_state()
+        # arm_state = robot.get_arm_state()
+        # grip_state = robot.get_grip_state()
         
         if arm_state is not None and total % 50 == 0:
             # print(f"[arm] {total}: pos={np.round(arm_state.arm_state.jnt.position, 3)}",
@@ -95,7 +94,7 @@ def main():
 
         count += 1
         time.sleep(1.0 / params.ctrl_rate)
-
+        
     robot.stop()
     print(f"[INFO]: Done ({total} steps).")
 

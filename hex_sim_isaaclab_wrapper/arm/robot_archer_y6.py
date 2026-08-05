@@ -76,7 +76,7 @@ class HexRobotSimArcherY6(HexRobotSimBase):
 
     Usage::
 
-        params = HexRobotSimArcherY6Params(device="cuda:0", headless=False)
+        params = HexRobotSimArcherY6Params(torch_device="cuda:0", headless=False)
         robot = HexRobotSimArcherY6(params)
         robot.start()
 
@@ -158,10 +158,10 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         # 1. Create Isaac Lab interface — *first* to satisfy AppLauncher
         from ..sim.isaaclab_interface import IsaacLabSimInterface
 
-        cli_args = ["--headless"] if bool(self._params.headless) else []
+        cli_args = ["--headless"] if bool(self._params.isaac_headless) else []
         sim = IsaacLabSimInterface()
-        sim.initialize(cli_args=cli_args, device=self._params.device,
-                        num_envs=self._params.num_envs, sim_env=self._params.sim_env)
+        sim.initialize(cli_args=cli_args, device=self._params.torch_device,
+                        num_envs=self._params.sim_num_envs, sim_env=self._params.sim_env)
         self._sim_interface = sim
 
         # 2. Now safe to import articulation configs (AppLauncher active)

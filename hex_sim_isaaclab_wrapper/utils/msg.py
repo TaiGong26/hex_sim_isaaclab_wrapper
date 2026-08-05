@@ -27,6 +27,8 @@ def _ns_to_time(ts_ns: int) -> HexDcBaseTime:
 
 def build_header(ts_ns: Optional[int] = None) -> HexDcBaseHeader:
     """Build a header with the given (or current) nanosecond timestamp."""
+    
+    #### HACK: Use Sim Time
     if ts_ns is None:
         ts_ns = ns_now()
     return HexDcBaseHeader(stamp=_ns_to_time(int(ts_ns)))
@@ -57,19 +59,31 @@ def build_hex_jnt(
     eff=None,
     kp=None,
     kd=None,
+    lim_vel=None,
+    lim_acc=None,
     dof: int = 0,
 ) -> HexDcBaseJntFull:
-    """Build a HexDcBaseJntFull from optional arrays, defaulting to zeros.
+    """Build a HexDcBaseJntFull from optional arrays.
 
-    All fields are keyword-only.  *dof* controls the fallback zero-array
-    length when a field is omitted.
+    All fields are keyword-only.  Omitted fields become **empty arrays** —
+    NOT zero-filled — so the consumer can distinguish "not provided" from an
+    explicit zero via ``arr.size == dof``.  (Zero-filling kp/kd would wipe out
+    an MIT command's PD gains whenever those fields are omitted.)
+
+    *dof* is retained for call-site compatibility; it no longer controls a
+    fallback length.
     """
+    def _arr(v: Optional[np.ndarray]) -> np.ndarray:
+        return np.asarray(v) if v is not None else np.array([], dtype=np.float64)
+
     return HexDcBaseJntFull(
-        pos=np.asarray(pos) if pos is not None else np.zeros(dof),
-        vel=np.asarray(vel) if vel is not None else np.zeros(dof),
-        eff=np.asarray(eff) if eff is not None else np.zeros(dof),
-        kp=np.asarray(kp) if kp is not None else np.zeros(dof),
-        kd=np.asarray(kd) if kd is not None else np.zeros(dof),
+        pos=_arr(pos),
+        vel=_arr(vel),
+        eff=_arr(eff),
+        kp=_arr(kp),
+        kd=_arr(kd),
+        lim_vel=_arr(lim_vel),
+        lim_acc=_arr(lim_acc),
     )
 
 

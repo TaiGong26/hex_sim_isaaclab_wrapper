@@ -280,9 +280,10 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         Args:
             cmd_dict: keys — ts_ns, jnt_pos, jnt_vel, mit_tau, mit_kp, mit_kd, grav
         """
-        ts_ns = cmd_dict.get("ts_ns", ns_now())
+        sim_time = self.get_sim_time()
+        sim_time = int(sim_time*1e9) if sim_time is not None else None
         cmd = HexDcRoboArmCtrlStamped(
-            header=build_header(ts_ns),
+            header=build_header(sim_time),
             arm_ctrl=HexDcRoboArmCtrl(
                 ctrl_mode=HexDcRoboArmCtrlMode.MIT,
                 grav=cmd_dict.get("grav"),
@@ -304,10 +305,11 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         Args:
             cmd_dict: keys — ts_ns, jnt_pos, jnt_eff, lim_vel, lim_acc, grav
         """
-        ts_ns = cmd_dict.get("ts_ns", ns_now())
+        sim_time = self.get_sim_time()
+        sim_time = int(sim_time*1e9) if sim_time is not None else None
         dof = self._dof_dict["arm"]
         cmd = HexDcRoboArmCtrlStamped(
-            header=build_header(ts_ns),
+            header=build_header(sim_time),
             arm_ctrl=HexDcRoboArmCtrl(
                 ctrl_mode=HexDcRoboArmCtrlMode.JNT,
                 grav=cmd_dict.get("grav"),
@@ -330,12 +332,14 @@ class HexRobotSimArcherY6(HexRobotSimBase):
             cmd_dict: keys — ts_ns, pose_pos [x,y,z], pose_quat [w,x,y,z],
                       jnt_eff, lim_vel, lim_acc, grav
         """
-        ts_ns = cmd_dict.get("ts_ns", ns_now())
+        sim_time = self.get_sim_time()
+        sim_time = int(sim_time*1e9) if sim_time is not None else None
+        
         pose_pos = np.asarray(cmd_dict["pose_pos"])
         pose_quat = np.asarray(cmd_dict.get("pose_quat", [1.0, 0.0, 0.0, 0.0]))
         dof = self._dof_dict["arm"]
         cmd = HexDcRoboArmCtrlStamped(
-            header=build_header(ts_ns),
+            header=build_header(sim_time),
             arm_ctrl=HexDcRoboArmCtrl(
                 ctrl_mode=HexDcRoboArmCtrlMode.EE,
                 grav=cmd_dict.get("grav"),
@@ -358,9 +362,11 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         """
         if not self._has_grip:
             return
-        ts_ns = cmd_dict.get("ts_ns", ns_now())
+        sim_time = self.get_sim_time()
+        sim_time = int(sim_time*1e9) if sim_time is not None else None
+        
         cmd = HexDcRoboGripCtrlStamped(
-            header=build_header(ts_ns),
+            header=build_header(sim_time),
             grip_ctrl=HexDcRoboGripCtrl(
                 ctrl_mode=HexDcRoboGripCtrlMode.MIT,
                 jnt=build_hex_jnt(
@@ -383,9 +389,11 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         """
         if not self._has_grip:
             return
-        ts_ns = cmd_dict.get("ts_ns", ns_now())
+        sim_time = self.get_sim_time()
+        sim_time = int(sim_time*1e9) if sim_time is not None else None
+        
         cmd = HexDcRoboGripCtrlStamped(
-            header=build_header(ts_ns),
+            header=build_header(sim_time),
             grip_ctrl=HexDcRoboGripCtrl(
                 ctrl_mode=HexDcRoboGripCtrlMode.JNT,
                 jnt=build_hex_jnt(
@@ -405,9 +413,11 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         """
         if not self._has_grip:
             return
-        ts_ns = cmd_dict.get("ts_ns", ns_now())
+        sim_time = self.get_sim_time()
+        sim_time = int(sim_time*1e9) if sim_time is not None else None
+        
         cmd = HexDcRoboGripCtrlStamped(
-            header=build_header(ts_ns),
+            header=build_header(sim_time),
             grip_ctrl=HexDcRoboGripCtrl(
                 ctrl_mode=HexDcRoboGripCtrlMode.TAU,
                 jnt=build_hex_jnt(
@@ -449,6 +459,12 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         base_id, ee_id = refs
         return self._sim_interface.get_body_pose_relative_by_ids(base_id, ee_id)
 
+    def get_sim_time(self) -> Optional[float]:
+        """Return sim time in seconds (Isaac Lab sim time, not wall-clock)."""
+        if self._sim_interface is None:
+            return None
+        return self._sim_interface.get_sim_time()
+    
     # ------------------------------------------------------------------
     # Internal — command processing (work thread context)
     # ------------------------------------------------------------------
@@ -616,9 +632,12 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         # EE pose relative to the arm's baselink (per-arm pose, dual-arm-ready)
         base_id, ee_id = self._arm_refs["arm"]
         ee_pos, ee_quat = sim.get_body_pose_relative_by_ids(base_id, ee_id)
-
+        
+        sim_time = self.get_sim_time()
+        sim_time = int(sim_time*1e9) if sim_time is not None else None
+        
         state_msg = HexDcRoboArmStateStamped(
-            header=build_header(),
+            header=build_header(sim_time),
             arm_state=HexDcRoboArmState(
                 jnt=HexDcBaseJntState(position=pos.copy(), velocity=vel.copy(), effort=eff.copy()),
                 pose=build_pose(ee_pos, ee_quat),
@@ -638,9 +657,12 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         self._cur_state["grip"]["jnt_pos"][:] = pos
         self._cur_state["grip"]["jnt_vel"][:] = vel
         self._cur_state["grip"]["jnt_eff"][:] = eff
+        
+        sim_time = self.get_sim_time()
+        sim_time = int(sim_time*1e9) if sim_time is not None else None
 
         state_msg = HexDcRoboGripStateStamped(
-            header=build_header(),
+            header=build_header(sim_time),
             grip_state=HexDcRoboGripState(
                 jnt=HexDcBaseJntState(position=pos.copy(), velocity=vel.copy(), effort=eff.copy()),
             ),

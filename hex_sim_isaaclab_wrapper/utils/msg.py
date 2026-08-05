@@ -9,6 +9,7 @@ from hex_util_msg.dataclass import (
     HexDcBasePose,
     HexDcBaseQuaternion,
     HexDcBaseTime,
+    HexDcBaseTwist,
     HexDcBaseVector3,
 )
 from hex_util_runtime import ns_now
@@ -87,6 +88,17 @@ def build_hex_jnt(
     )
 
 
+def build_twist(
+    linear: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    angular: tuple[float, float, float] = (0.0, 0.0, 0.0),
+) -> HexDcBaseTwist:
+    """Build a HexDcBaseTwist from optional tuples (mirrors driver ``_build_twist``)."""
+    return HexDcBaseTwist(
+        linear=build_vector3(x=linear[0], y=linear[1], z=linear[2]),
+        angular=build_vector3(x=angular[0], y=angular[1], z=angular[2]),
+    )
+
+
 def build_pose(
     pos: Optional[np.ndarray] = None,
     quat: Optional[np.ndarray] = None,
@@ -110,4 +122,5 @@ __all__ = [
     "build_quaternion",
     "build_hex_jnt",
     "build_pose",
+    "build_twist",
 ]

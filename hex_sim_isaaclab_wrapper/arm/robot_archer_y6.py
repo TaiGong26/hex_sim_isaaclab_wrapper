@@ -156,11 +156,11 @@ class HexRobotSimArcherY6(HexRobotSimBase):
 
     def init_robot(self) -> None:
         # 1. Create Isaac Lab interface — *first* to satisfy AppLauncher
-        from ..sim.isaaclab_interface import IsaacLabSimInterface
+        from ..sim.isaaclab_arm_interface import IsaacLabArmInterface
 
         cli_args = ["--headless"] if bool(self._params.isaac_headless) else []
-        sim = IsaacLabSimInterface()
-        sim.initialize(cli_args=cli_args, device=self._params.torch_device,
+        sim = IsaacLabArmInterface()
+        sim.initialize(cli_args=cli_args, device=self._params.torch_device,dt = self._params.ctrl_rate,
                         num_envs=self._params.sim_num_envs, sim_env=self._params.sim_env)
         self._sim_interface = sim
 

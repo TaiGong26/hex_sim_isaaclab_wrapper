@@ -3,7 +3,8 @@
 The interface exchanges data via **numpy** arrays (not torch) so that
 switching backends (Isaac Lab, Mujoco, …) never leaks a framework dependency.
 
-Concrete implementation: ``IsaacLabSimInterface`` in ``sim.isaaclab_interface``.
+Concrete implementations: ``IsaacLabArmInterface`` in ``sim.isaaclab_arm_interface``
+and ``IsaacLabChassisInterface`` in ``sim.isaaclab_chassis_interface``.
 """
 
 from abc import ABC, abstractmethod

@@ -1,4 +1,4 @@
-"""IsaacLabSimInterface — Isaac Lab backend for SimInterface.
+"""IsaacLabChassisInterface — Isaac Lab backend for SimInterface.
 
 CRITICAL TIMING CONSTRAINT
 --------------------------
@@ -35,12 +35,12 @@ from ..utils import numpy_to_torch, torch_to_numpy
 from .interface import SimInterface, ActuatorCmd
 
 
-class IsaacLabSimInterface(SimInterface):
+class IsaacLabChassisInterface(SimInterface):
     """Isaac Lab implementation of SimInterface.
 
     Usage (inside a method, not at module level)::
 
-        sim = IsaacLabSimInterface()
+        sim = IsaacLabChassisInterface()
         sim.initialize(cli_args=["--headless"], device="cuda:0", num_envs=1)
         sim.spawn_robot("arm", some_articulation_cfg)
         # Ready to step:
@@ -68,7 +68,7 @@ class IsaacLabSimInterface(SimInterface):
     # ------------------------------------------------------------------
 
     def initialize(self, cli_args: Optional[list[str]] = None,
-                   device: str = "cuda:0", num_envs: int = 1,
+                   device: str = "cuda:0", num_envs: int = 1, dt: float = 60.0,
                    camera_pos: tuple[float, float, float] = (2.5, 0.0, 4.0),
                    camera_target: tuple[float, float, float] = (0.0, 0.0, 2.0),
                    sim_env=None) -> None:
@@ -80,6 +80,7 @@ class IsaacLabSimInterface(SimInterface):
             cli_args:     CLI argument list (e.g. ``["--headless"]``).
             device:       Torch device string.
             num_envs:     Number of parallel environments.
+            dt:           Control-loop rate [Hz]; sim step dt = 1/dt.
             camera_pos:   Initial camera position.
             camera_target: Initial camera look-at target.
             sim_env:      Environment config (a ``HexSimEnvParams``-like object
@@ -90,7 +91,7 @@ class IsaacLabSimInterface(SimInterface):
         import argparse
         from isaaclab.app import AppLauncher
 
-        parser = argparse.ArgumentParser(description="IsaacLabSimInterface")
+        parser = argparse.ArgumentParser(description="IsaacLabChassisInterface")
         AppLauncher.add_app_launcher_args(parser)
         parsed, _ = parser.parse_known_args(cli_args)
         parsed.device = device
@@ -113,7 +114,7 @@ class IsaacLabSimInterface(SimInterface):
         from isaaclab.scene import InteractiveScene, InteractiveSceneCfg  # noqa: F811
         from isaaclab.utils import configclass  # noqa: F811
 
-        sim_cfg = sim_utils.SimulationCfg(device=device,)
+        sim_cfg = sim_utils.SimulationCfg(device=device, dt=(1/dt))
         self._sim = sim_utils.SimulationContext(sim_cfg)
         self._sim_dt = self._sim.get_physics_dt()
         self._sim.set_camera_view(camera_pos, camera_target)
@@ -269,7 +270,17 @@ class IsaacLabSimInterface(SimInterface):
         root_pose = articulation.data.root_pose_w[0]
         return torch_to_numpy(root_pose[:3]), torch_to_numpy(root_pose[3:7])
 
-    
+    def get_root_velocity(self) -> tuple[np.ndarray, np.ndarray]:
+        """Read the root (base) velocity in world frame.
+
+        Returns:
+            (lin_vel [m/s] (3,), ang_vel [rad/s] (3,)).
+        """
+        articulation = self._get_articulation()
+        return (torch_to_numpy(articulation.data.root_lin_vel_w[0]),
+                torch_to_numpy(articulation.data.root_ang_vel_w[0]))
+
+
     # ------------------------------------------------------------------
     # Command writing  ← numpy
     # ------------------------------------------------------------------

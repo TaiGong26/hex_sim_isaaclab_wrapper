@@ -115,6 +115,7 @@ class HexRobotSimChassis(HexRobotSimBase):
         sim = IsaacLabChassisInterface()
         sim.initialize(cli_args=cli_args, device=self._params.torch_device,
                        num_envs=self._params.sim_num_envs, dt=self._params.ctrl_rate,
+                       render_rate=self._params.render_rate,
                        sim_env=self._params.sim_env)
         self._sim_interface = sim
 

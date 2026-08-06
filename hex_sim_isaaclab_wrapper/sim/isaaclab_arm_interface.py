@@ -54,6 +54,8 @@ class IsaacLabArmInterface(SimInterface):
         self._scene = None
         self._num_envs = 1
         self._sim_dt = 0.0
+        self._render_interval = 1
+        self._sim_step_counter = 0
         self._device = "cuda:0"
         self._robot_configs: dict[str, tuple] = {}
         self._scene_ready = False
@@ -68,7 +70,8 @@ class IsaacLabArmInterface(SimInterface):
     # ------------------------------------------------------------------
 
     def initialize(self, cli_args: Optional[list[str]] = None,
-                   device: str = "cuda:0", num_envs: int = 1, dt:float = 60.0,
+                   device: str = "cuda:0", num_envs: int = 1, dt: float = 60.0,
+                   render_rate: float = 60.0,
                    camera_pos: tuple[float, float, float] = (2.5, 0.0, 4.0),
                    camera_target: tuple[float, float, float] = (0.0, 0.0, 2.0),
                    sim_env=None) -> None:
@@ -80,6 +83,9 @@ class IsaacLabArmInterface(SimInterface):
             cli_args:     CLI argument list (e.g. ``["--headless"]``).
             device:       Torch device string.
             num_envs:     Number of parallel environments.
+            dt:           Control-loop rate [Hz]; sim step dt = 1/dt.
+            render_rate:  Rendering frequency [Hz]; physics steps per render
+                          = round(dt / render_rate).
             camera_pos:   Initial camera position.
             camera_target: Initial camera look-at target.
             sim_env:      Environment config (a ``HexSimEnvParams``-like object
@@ -113,7 +119,10 @@ class IsaacLabArmInterface(SimInterface):
         from isaaclab.scene import InteractiveScene, InteractiveSceneCfg  # noqa: F811
         from isaaclab.utils import configclass  # noqa: F811
 
-        sim_cfg = sim_utils.SimulationCfg(device=device, dt=(1/dt))
+        render_interval = max(1, int(round(dt / render_rate)))
+        self._render_interval = render_interval
+        sim_cfg = sim_utils.SimulationCfg(device=device, dt=(1/dt),
+                                          render_interval=render_interval)
         self._sim = sim_utils.SimulationContext(sim_cfg)
         self._sim_dt = self._sim.get_physics_dt()
         self._sim.set_camera_view(camera_pos, camera_target)
@@ -335,13 +344,17 @@ class IsaacLabArmInterface(SimInterface):
     # ------------------------------------------------------------------
 
     def step(self) -> None:
-        """Advance physics by one dt.
+        """Advance physics by one dt; render every ``_render_interval`` steps (GUI only).
 
-        Order: apply pending commands → flush to sim → step → update scene.
+        Order: apply pending commands → flush to sim → physics step → throttled
+        render → update scene.  Mirror of ``ManagerBasedEnv``'s render loop.
         """
         self._apply_commands()
         self._scene.write_data_to_sim()
-        self._sim.step()
+        self._sim_step_counter += 1
+        self._sim.step(render=False)
+        if self._sim_step_counter % self._render_interval == 0 and self._sim.has_gui():
+            self._sim.render()
         self._scene.update(self._sim_dt)
 
     # ==================================================================

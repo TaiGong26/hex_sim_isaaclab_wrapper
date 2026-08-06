@@ -27,8 +27,9 @@ def main():
 
     params = HexRobotSimMaverX4Params(
         isaac_headless=args.headless,
-        ctrl_rate=500.0,
-        torch_device="cuda:0",
+        render_rate=50.0,
+        ctrl_rate=1000.0,
+        torch_device="cpu",
     )
     robot = HexRobotSimMaverX4(params)
     robot.start()
@@ -36,9 +37,11 @@ def main():
 
     dof = 8
     jnt_vel = np.zeros(dof)
-    jnt_vel[4:] = 1.0   # articulation order: steering 0-3, drive 4-7
+    jnt_vel[4:] = 3.0   # articulation order: steering 0-3, drive 4-7
 
     count = 0
+    freq_t0 = time.monotonic()
+    freq_c0 = 0
     while robot.is_working():
         if args.steps > 0 and count >= args.steps:
             break
@@ -51,12 +54,19 @@ def main():
         })
         robot.step()
         if count % 50 == 0:
+            now = time.monotonic()
+            actual_hz = (count - freq_c0) / (now - freq_t0)
+            freq_t0, freq_c0 = now, count
             st = robot.get_chassis_state()
             if st is not None:
                 cs = st.chs_state
-                print(f"[x4] {count}: jnt_len={len(cs.jnt.position)} "
-                      f"odom.pose.position={cs.odom.pose.position} "
-                      f"odom.twist.linear={cs.odom.twist.linear}", flush=True)
+                print(f"[x4] {count}: jnt_len={len(cs.jnt.position)} \n"
+                      f"chassis joint eff {cs.jnt.effort} \n"
+                      f"chassis joint vel {cs.jnt.velocity} \n"
+                      f"chassis joint pos {cs.jnt.position} \n"
+                      f"chassis linear {cs.odom.twist.linear} \n"
+                      f"chassis angular {cs.odom.twist.angular} \n"
+                      , flush=True)
         count += 1
         time.sleep(1.0 / params.ctrl_rate)
 

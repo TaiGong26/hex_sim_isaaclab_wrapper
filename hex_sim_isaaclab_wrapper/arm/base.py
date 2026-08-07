@@ -1,20 +1,20 @@
 """Base classes for the sim robot wrapper.
 
-Model
------
-- ``HexRobotSimParams`` — pure simulation parameters (no hardware concepts).
-- ``HexRobotSimBase`` — abstract base with **work thread** (like
-  ``hex_driver_robot``\ 's ``HexRobotBase``).  Users call ``start()`` to kick
-  off the background thread, then poll state via ``get_arm_state()``.
-  ``stop()`` joins the thread and cleans up the simulator.
+## Model
 
-Lifecycle
----------
-1. ``robot = HexRobotSimArcherY6(params)`` — constructor.
-2. ``robot.start()`` — calls ``init_vars()`` + ``init_robot()``, then starts
-   the background ``work_loop()`` thread (non-blocking).
-3. (background) ``work_loop()`` runs at ``ctrl_rate`` via ``HexRate``.
-4. ``robot.stop()`` — signals thread to exit, joins, closes sim.
+- `HexRobotSimParams` — pure simulation parameters (no hardware concepts).
+- `HexRobotSimBase` — abstract base with **work thread** (like
+  `hex_driver_robot`'s `HexRobotBase`). Users call `start()` to kick off
+  the background thread, then poll state via `get_arm_state()`.
+  `stop()` joins the thread and cleans up the simulator.
+
+## Lifecycle
+
+1. `robot = HexRobotSimArcherY6(params)` — constructor.
+2. `robot.start()` — calls `init_vars()` + `init_robot()`, then starts
+   the background `work_loop()` thread (non-blocking).
+3. (background) `work_loop()` runs at `ctrl_rate` via `HexRate`.
+4. `robot.stop()` — signals thread to exit, joins, closes sim.
 """
 
 from abc import ABC, abstractmethod
@@ -32,8 +32,8 @@ from ..tools.log import setup_logger
 class HexSimEnvParams:
     """Scene environment configuration passed to SimInterface.
 
-    Each field ``*_cfg`` accepts an Isaac Lab ``SpawnCfg`` (e.g.
-    ``GroundPlaneCfg``, ``DomeLightCfg``).  ``None`` means the
+    Each field `*_cfg` accepts an Isaac Lab `SpawnCfg` (e.g.
+    `GroundPlaneCfg`, `DomeLightCfg`). `None` means the
     SimInterface will use its own built-in default.
     """
     ground_prim_path: str = "/World/defaultGroundPlane"
@@ -55,10 +55,10 @@ class HexRobotSimParams:
     Attributes:
         ctrl_rate:        Simulation control loop rate [Hz].
         render_rate:      Rendering frequency [Hz]; interface converts to
-                          ``render_interval = round(ctrl_rate / render_rate)``.
+                          `render_interval = round(ctrl_rate / render_rate)`.
         state_buffer_size: Number of state deque entries to retain.
         num_envs:          Number of parallel environments (Isaac Lab).
-        device:            Torch device string (e.g. ``"cuda:0"``, ``"cpu"``).
+        device:            Torch device string (e.g. `"cuda:0"`, `"cpu"`).
         headless:          Run without rendering window.
     """
     ctrl_rate: float = 1000.0
@@ -83,19 +83,22 @@ class HexRobotSimParams:
 class HexRobotSimBase(ABC):
     """Abstract sim robot — work-thread-based lifecycle.
 
-    Usage::
+    Example:
 
-        robot = HexRobotSimArcherY6(params)
-        robot.start()                     # non-blocking, kicks off thread
-        while robot.is_working():
-            robot.set_arm_pos_cmd({...})
-            robot.step()                  # process → sim step → read state
-            state = robot.get_arm_state()
-            time.sleep(1.0 / params.ctrl_rate)
-        robot.stop()                      # joins thread, closes sim
+    ```python
+    robot = HexRobotSimArcherY6(params)
+    robot.start()                     # non-blocking, kicks off thread
+    while robot.is_working():
+        robot.set_arm_pos_cmd({...})
+        robot.step()                  # process → sim step → read state
+        state = robot.get_arm_state()
+        time.sleep(1.0 / params.ctrl_rate)
+    robot.stop()                      # joins thread, closes sim
+    ```
     """
 
     def __init__(self, params: HexRobotSimParams, name: str) -> None:
+        """Store params, set up logging and the background work thread."""
         self._params = params
         self._sim_interface = None  # set by subclass in init_robot()
         self._log = setup_logger(name=name)
@@ -151,12 +154,11 @@ class HexRobotSimBase(ABC):
 
     @abstractmethod
     def work_loop(self) -> None:
-        """Background thread body — called at ``ctrl_rate`` via ``HexRate``.
+        """Background thread body — called at `ctrl_rate` via `HexRate`.
 
-        .. note::
-           Sim stepping should **not** be done here — call :meth:`step` from
-           the main thread instead.  Isaac Lab's ``SimulationContext.step()``
-           expects to run on the same thread as the application event loop.
+        > **Note:** Sim stepping should **not** be done here — call `step()`
+        from the main thread instead. Isaac Lab's `SimulationContext.step()`
+        expects to run on the same thread as the application event loop.
         """
         ...
 
@@ -167,13 +169,15 @@ class HexRobotSimBase(ABC):
         Processes pending commands → applies them → steps simulation →
         reads state into deques.
 
-        Usage in a control loop::
+        Example:
 
-            while robot.is_working():
-                robot.set_arm_pos_cmd({"jnt_pos": [...]})
-                robot.step()
-                state = robot.get_arm_state()
-                time.sleep(1.0 / params.ctrl_rate)
+        ```python
+        while robot.is_working():
+            robot.set_arm_pos_cmd({"jnt_pos": [...]})
+            robot.step()
+            state = robot.get_arm_state()
+            time.sleep(1.0 / params.ctrl_rate)
+        ```
         """
         ...
 
@@ -181,17 +185,18 @@ class HexRobotSimBase(ABC):
     # log convenience wrappers
     # ------------------------------------------------------------------
 
-    def loge(self, msg: Any, *args, **kwargs) -> None:
+    def loge(self, msg: Any, *args: Any, **kwargs: Any) -> None:
+        """Log error message."""
         self._log.error(msg, *args, **kwargs)
 
-    def logd(self, msg: Any, *args, **kwargs) -> None:
+    def logd(self, msg: Any, *args: Any, **kwargs: Any) -> None:
         """Log debug message."""
         self._log.debug(msg, *args, **kwargs)
 
-    def logi(self, msg: Any, *args, **kwargs) -> None:
+    def logi(self, msg: Any, *args: Any, **kwargs: Any) -> None:
         """Log info message."""
         self._log.info(msg, *args, **kwargs)
 
-    def logw(self, msg: Any, *args, **kwargs) -> None:
+    def logw(self, msg: Any, *args: Any, **kwargs: Any) -> None:
         """Log warning message."""
         self._log.warning(msg, *args, **kwargs)

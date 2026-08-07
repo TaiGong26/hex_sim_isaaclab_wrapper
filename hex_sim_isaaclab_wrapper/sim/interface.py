@@ -3,15 +3,18 @@
 The interface exchanges data via **numpy** arrays (not torch) so that
 switching backends (Isaac Lab, Mujoco, …) never leaks a framework dependency.
 
-Concrete implementations: ``IsaacLabArmInterface`` in ``sim.isaaclab_arm_interface``
-and ``IsaacLabChassisInterface`` in ``sim.isaaclab_chassis_interface``.
+Concrete implementations: `IsaacLabArmInterface` in `sim.isaaclab_arm_interface`
+and `IsaacLabChassisInterface` in `sim.isaaclab_chassis_interface`.
 """
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from isaaclab.assets import ArticulationCfg
 
 
 # ---------------------------------------------------------------------------
@@ -23,12 +26,18 @@ import numpy as np
 class ActuatorCmd:
     """Unified actuator command — all fields optional.
 
-    ``None`` means "do not modify this quantity" when the command is applied
-    in :meth:`SimInterface.step`.
+    `None` means "do not modify this quantity" when the command is applied
+    in `SimInterface.step()`. The fields combine as:
+    - `position` + `stiffness` / `damping` → ImplicitActuator PD target
+    - `effort` → feed-forward torque override
+    - `velocity` → velocity target
 
-    - ``position`` + ``stiffness``/``damping`` → ImplicitActuator PD target
-    - ``effort`` → feed-forward torque override
-    - ``velocity`` → velocity target
+    Attributes:
+        position:  Joint position target [rad].
+        velocity:  Joint velocity target [rad/s].
+        effort:    Feed-forward torque override [Nm].
+        stiffness: PD stiffness (kp).
+        damping:   PD damping (kd).
     """
     position:   Optional[np.ndarray] = None   # joint position target [rad]
     velocity:   Optional[np.ndarray] = None   # joint velocity target [rad/s]
@@ -55,8 +64,8 @@ class SimInterface(ABC):
         """Boot the simulator (AppLauncher, SimulationContext, …).
 
         Args:
-            cli_args: CLI argument list for parsing (e.g. ``["--headless"]``).
-                      If None, uses ``sys.argv[1:]``.
+            cli_args: CLI argument list for parsing (e.g. `["--headless"]`).
+                      If None, uses `sys.argv[1:]`.
             device:   Torch device string.
             num_envs: Number of parallel environments.
         """
@@ -77,11 +86,11 @@ class SimInterface(ABC):
     # ------------------------------------------------------------------
 
     @abstractmethod
-    def spawn_robot(self, name: str, articulation_cfg,
+    def spawn_robot(self, name: str, articulation_cfg: "ArticulationCfg",
                     prim_path: Optional[str] = None) -> None:
         """Register and spawn a robot articulation in the scene.
 
-        The *articulation_cfg* is an ``isaaclab.assets.ArticulationCfg``
+        The *articulation_cfg* is an `isaaclab.assets.ArticulationCfg`
         (or any backend-specific config); the interface knows how to consume it.
 
         After spawning, subsequent getter/setter calls use internally
@@ -90,7 +99,7 @@ class SimInterface(ABC):
         Args:
             name:             Entity name used to reference the robot later.
             articulation_cfg: Backend-specific articulation configuration.
-            prim_path:        USD prim path (e.g. ``"{ENV_REGEX_NS}/MyRobot"``).
+            prim_path:        USD prim path (e.g. `"{ENV_REGEX_NS}/MyRobot"`).
                               If None, a default path is generated.
         """
         ...
@@ -109,7 +118,7 @@ class SimInterface(ABC):
         """Read joint positions [rad] as (num_joints,) numpy array.
 
         Args:
-            actuator: Actuator group name (key in ``ArticulationCfg.actuators``).
+            actuator: Actuator group name (key in `ArticulationCfg.actuators`).
         """
         ...
 
@@ -135,7 +144,7 @@ class SimInterface(ABC):
     def get_gravity_coriolis_compensation(self, actuator: str) -> np.ndarray:
         """Read gravity + Coriolis/centrifugal compensation torques [Nm].
 
-        The sum equals ``C*dq + G`` — the feed-forward torque required to hold
+        The sum equals `C*dq + G` — the feed-forward torque required to hold
         the arm against gravity and inertial coupling at the current state.
 
         Args:
@@ -182,7 +191,7 @@ class SimInterface(ABC):
     def push_command(self, actuator: str, cmd: ActuatorCmd) -> None:
         """Push a command for an actuator.
 
-        The command is applied during the next :meth:`step()` call.
+        The command is applied during the next `step()` call.
         If a previous command for the same actuator is pending, it is
         overwritten (latest wins).
 
@@ -206,7 +215,7 @@ class SimInterface(ABC):
     def step(self) -> None:
         """Advance the simulation by one physics dt.
 
-        Internally: apply pending commands → ``write_data_to_sim()`` →
-        ``sim.step()`` → ``scene.update(dt)``.
+        Internally: apply pending commands → `write_data_to_sim()` →
+        `sim.step()` → `scene.update(dt)`.
         """
         ...

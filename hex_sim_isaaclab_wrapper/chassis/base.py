@@ -1,30 +1,33 @@
 """Base class for simulated wheeled chassis robots.
 
-Mirrors ``hex_driver_robot.robot_chassis.HexRobotChassisCallback``, but for
-simulation only: the same public API (``set_chs_mit_cmd`` / ``set_chs_vel_cmd``
-/ ``get_chassis_state``) is backed by the lower-level ``SimInterface`` instead
-of a hardware ``Chassis`` device.
+Mirrors `hex_driver_robot.robot_chassis.HexRobotChassisCallback`, but for
+simulation only: the same public API (`set_chs_mit_cmd` / `set_chs_vel_cmd`
+/ `get_chassis_state`) is backed by the lower-level `SimInterface` instead
+of a hardware `Chassis` device.
 
-Decoupling (mirrors the arm layer)
-----------------------------------
-- ``HexRobotSimBase`` (in ``arm/base.py``) provides the lifecycle only.
-- ``HexRobotSimChassis`` below holds the **common** chassis plumbing: step /
+## Decoupling (mirrors the arm layer)
+
+- `HexRobotSimBase` (in `arm/base.py`) provides the lifecycle only.
+- `HexRobotSimChassis` below holds the **common** chassis plumbing: step /
   work loop / command message building / state publication / odometry.
 - Each chassis subclass declares its model-specific **canonical joint order**
-  via ``JOINT_STATE_NAME`` and its USD config via ``_get_articulation_cfg()``.
+  via `JOINT_STATE_NAME` and its USD config via `_get_articulation_cfg()`.
   The wrapper resolves the USD's joints **by name** at spawn time, so it never
   assumes the USD articulation order — the command / state arrays are always
   in the robot's canonical order.
 """
 
+from __future__ import annotations
+
 import math
 from abc import abstractmethod
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 from hex_util_msg.dataclass import (
+    HexDcBaseJntFull,
     HexDcBaseJntState,
     HexDcBaseOdometry,
     HexDcBasePose,
@@ -42,6 +45,9 @@ from ..arm.base import HexRobotSimBase, HexRobotSimParams
 from ..sim.interface import ActuatorCmd
 from ..utils import build_header, build_hex_jnt, build_twist, build_vector3
 
+if TYPE_CHECKING:
+    from isaaclab.assets import Articulation, ArticulationCfg
+
 
 # ---------------------------------------------------------------------------
 # Params
@@ -56,23 +62,33 @@ class HexRobotSimChassisParams(HexRobotSimParams):
 # Module-level helper — canonical-order joint resolution (by name)
 # ---------------------------------------------------------------------------
 
-def _resolve_actuator_canonical_indices(articulation, joint_state_name: list[str]):
+def _resolve_actuator_canonical_indices(
+    articulation: Articulation, joint_state_name: list[str]
+) -> dict[str, np.ndarray]:
     """Map each actuator's joints to their indices in the canonical order.
 
-    Returns ``{actuator_name: np.ndarray[int]}`` — for every actuator that owns
-    at least one canonical joint, the canonical indices of those joints, in the
-    actuator's **own** joint order (which matches the ``get_joint_*`` readback
-    and ``push_command`` write layout).
+    Returns `{actuator_name: np.ndarray[int]}` — for every actuator that owns
+    at least one canonical joint, the canonical indices of those joints, in
+    the actuator's **own** joint order (which matches the `get_joint_*`
+    readback and `push_command` write layout).
 
-    Matching is purely **by joint name**, so the wrapper does not depend on the
-    USD's articulation order — this is what makes the canonical order
+    Matching is purely **by joint name**, so the wrapper does not depend on
+    the USD's articulation order — this is what makes the canonical order
     (e.g. the mujoco-aligned Maver X4 order) authoritative.
 
-    Raises ``RuntimeError`` if:
-      - a canonical joint is missing from the articulation,
-      - a canonical joint is claimed by two actuators,
-      - an actuator that owns canonical joints also owns a non-canonical joint
-        (the command arrays would then be sized wrong for that actuator).
+    Args:
+        articulation:     Spawned articulation whose joints are matched.
+        joint_state_name: Canonical joint names of this robot.
+
+    Returns:
+        Actuator name → canonical indices of its joints, in the actuator's
+        own joint order (matches the `get_joint_*` readback layout).
+
+    Raises:
+        RuntimeError: If a canonical joint is missing from the articulation,
+            claimed by two actuators, or an actuator that owns canonical
+            joints also owns a non-canonical joint (the command arrays would
+            then be sized wrong for that actuator).
     """
     articulation_joint_names = list(articulation.joint_names)
     missing = [n for n in joint_state_name if n not in articulation_joint_names]
@@ -117,26 +133,28 @@ def _resolve_actuator_canonical_indices(articulation, joint_state_name: list[str
 class HexRobotSimChassis(HexRobotSimBase):
     """Shared sim chassis — MIT command dispatch + odometry state publication.
 
-    Subclasses implement ``_get_articulation_cfg()`` (lazy USD config import),
-    set ``CHASSIS_NAME``, and declare ``JOINT_STATE_NAME`` — the authoritative
+    Subclasses implement `_get_articulation_cfg()` (lazy USD config import),
+    set `CHASSIS_NAME`, and declare `JOINT_STATE_NAME` — the authoritative
     joint order of this robot (used for both command dispatch and state
     publication, and resolved against the USD **by joint name**).
 
-    Usage::
+    Example:
 
-        params = HexRobotSimMaverX4Params(...)
-        robot = HexRobotSimMaverX4(params)
-        robot.start()
-        while robot.is_working():
-            robot.set_chs_mit_cmd({
-                "jnt_pos": np.zeros(8), "jnt_vel": np.zeros(8),
-                "mit_tau": np.zeros(8), "mit_kp": np.full(8, 400.0),
-                "mit_kd": np.full(8, 20.0),
-            })
-            robot.step()
-            st = robot.get_chassis_state()
-            time.sleep(1.0 / params.ctrl_rate)
-        robot.stop()
+    ```python
+    params = HexRobotSimMaverX4Params(...)
+    robot = HexRobotSimMaverX4(params)
+    robot.start()
+    while robot.is_working():
+        robot.set_chs_mit_cmd({
+            "jnt_pos": np.zeros(8), "jnt_vel": np.zeros(8),
+            "mit_tau": np.zeros(8), "mit_kp": np.full(8, 400.0),
+            "mit_kd": np.full(8, 20.0),
+        })
+        robot.step()
+        st = robot.get_chassis_state()
+        time.sleep(1.0 / params.ctrl_rate)
+    robot.stop()
+    ```
     """
 
     #: Scene entity name used for spawn / articulation lookup (subclass sets).
@@ -147,6 +165,7 @@ class HexRobotSimChassis(HexRobotSimBase):
     JOINT_STATE_NAME: list[str] = []
 
     def __init__(self, params: HexRobotSimChassisParams, name: str) -> None:
+        """Set up user-facing state deques/callbacks and chassis buffers."""
         super().__init__(params=params, name=name)
 
         # User-facing state deques / callbacks
@@ -174,6 +193,7 @@ class HexRobotSimChassis(HexRobotSimBase):
     # ------------------------------------------------------------------
 
     def init_vars(self) -> None:
+        """Initialize the command deque and current-command buffer."""
         self._deque_dict = {
             "chs_cmd": deque(maxlen=self._params.state_buffer_size),
         }
@@ -184,6 +204,7 @@ class HexRobotSimChassis(HexRobotSimBase):
     # ------------------------------------------------------------------
 
     def init_robot(self) -> None:
+        """Spawn the articulation and resolve the canonical joint layout."""
         # 1. Isaac Lab chassis interface — first, to satisfy AppLauncher
         from ..sim.isaaclab_chassis_interface import IsaacLabChassisInterface
 
@@ -242,8 +263,8 @@ class HexRobotSimChassis(HexRobotSimBase):
     def work_loop(self) -> None:
         """Background heartbeat.
 
-        Sim stepping is done synchronously via :meth:`step` on the main thread
-        to keep ``SimulationContext.step()`` on the event-loop thread.
+        Sim stepping is done synchronously via `step()` on the main thread
+        to keep `SimulationContext.step()` on the event-loop thread.
         """
         rate = HexRate(self._params.ctrl_rate)
         while self.is_working():
@@ -270,10 +291,10 @@ class HexRobotSimChassis(HexRobotSimBase):
         """Queue a direct-impedance (MIT) command.
 
         Args:
-            cmd_dict: keys — ``jnt_pos``, ``jnt_vel``, ``mit_tau``, ``mit_kp``,
-                ``mit_kd``; each an array of shape (dof,) in **canonical joint
-                order** (this robot's ``JOINT_STATE_NAME``). Omitted fields
-                keep the config's default PD (see ``build_hex_jnt``
+            cmd_dict: keys — `jnt_pos`, `jnt_vel`, `mit_tau`, `mit_kp`,
+                `mit_kd`; each an array of shape (dof,) in **canonical joint
+                order** (this robot's `JOINT_STATE_NAME`). Omitted fields
+                keep the config's default PD (see `build_hex_jnt`
                 empty-array semantics below).
         """
         sim_time = self.get_sim_time()
@@ -295,6 +316,15 @@ class HexRobotSimChassis(HexRobotSimBase):
         self._deque_dict["chs_cmd"].append(cmd)
 
     def set_chs_vel_cmd(self, cmd_dict: dict[str, Any]) -> None:
+        """Queue a kinematic velocity command — **not implemented**.
+
+        Kinematic control (vx, vy, omega) → per-joint MIT conversion is not
+        designed yet. Per user decision this raises immediately rather than
+        no-ops; use `set_chs_mit_cmd` instead.
+
+        Raises:
+            NotImplementedError: Always — VEL→MIT conversion is a TODO.
+        """
         # TODO: kinematic control (vx, vy, omega) → per-joint MIT is not
         # designed yet. User decision: raise immediately rather than no-op.
         raise NotImplementedError(
@@ -336,14 +366,14 @@ class HexRobotSimChassis(HexRobotSimBase):
         # NONE → no-op; VEL never arrives (setter raises NotImplementedError),
         # kept defensively.
 
-    def _apply_chs_mit(self, jnt_info) -> None:
+    def _apply_chs_mit(self, jnt_info: HexDcBaseJntFull) -> None:
         """Slice a full MIT command into per-actuator ActuatorCmds.
 
-        ``jnt_info`` is a ``HexDcBaseJntFull`` whose arrays are either size
-        ``self._dof`` (in **canonical joint order**) or empty (field omitted —
-        ``build_hex_jnt`` semantics). Each actuator receives only its own joint
+        `jnt_info` is a `HexDcBaseJntFull` whose arrays are either size
+        `self._dof` (in **canonical joint order**) or empty (field omitted —
+        `build_hex_jnt` semantics). Each actuator receives only its own joint
         slice, reordered from canonical order to the actuator's local joint
-        order via ``_actuator_canonical_idxs``.
+        order via `_actuator_canonical_idxs`.
         """
         def _extract_field(field_name: str) -> Optional[np.ndarray]:
             """Return the command's full-array field if present (size == dof),
@@ -434,10 +464,10 @@ class HexRobotSimChassis(HexRobotSimBase):
 
     @classmethod
     @abstractmethod
-    def _get_articulation_cfg(cls):
-        """Return the USD ArticulationCfg for this chassis.
+    def _get_articulation_cfg(cls) -> ArticulationCfg:
+        """Return the USD `ArticulationCfg` for this chassis.
 
         Import happens **inside** this method (AppLauncher is already up), so
-        ``hex_isaac_usd.configs`` eager-importing all configs is safe here.
+        `hex_isaac_usd.configs` eager-importing all configs is safe here.
         """
         raise NotImplementedError

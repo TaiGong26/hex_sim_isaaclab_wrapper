@@ -1,6 +1,6 @@
 """HexRobotSimMaverX4 — simulated Maver X4 chassis (8 MIT motors).
 
-Canonical joint order (``JOINT_STATE_NAME``) is shared with the Mujoco /
+Canonical joint order (`JOINT_STATE_NAME`) is shared with the Mujoco /
 URDF / ROS2 references and must not be changed without updating all of them:
 
     [joint_yaw1, joint_wheel1, joint_yaw2, joint_wheel2,
@@ -9,18 +9,25 @@ URDF / ROS2 references and must not be changed without updating all of them:
 - steering (yaw)  → canonical indices [0, 2, 4, 6]
 - drive (wheels)  → canonical indices [1, 3, 5, 7]
 
-Sources:
-  - ``hex_ros2_dev`` ``hex_ros_sim_maver_x4/mjcf/{robot,setting}.xml``
-  - ``hex_ros2_dev`` ``hex_ros_robot_chassis/.../robot_maver.py`` (JOINT_STATE_NAME)
-  - ``hex_ros2_dev`` ``hex_ros_urdf_maver_x4/urdf/model.urdf``
+## Sources
+
+- `hex_ros2_dev` `hex_ros_sim_maver_x4/mjcf/{robot,setting}.xml`
+- `hex_ros2_dev` `hex_ros_robot_chassis/.../robot_maver.py` (`JOINT_STATE_NAME`)
+- `hex_ros2_dev` `hex_ros_urdf_maver_x4/urdf/model.urdf`
 
 The wrapper matches the USD's joints **by name** at spawn time, so the USD
 articulation order itself never matters.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from .base import HexRobotSimChassis, HexRobotSimChassisParams
+
+if TYPE_CHECKING:
+    from isaaclab.assets import ArticulationCfg
 
 #: Canonical joint order — must match the Mujoco / URDF / ROS2 references.
 JOINT_STATE_NAME = [
@@ -44,9 +51,11 @@ class HexRobotSimMaverX4(HexRobotSimChassis):
         self,
         params: HexRobotSimMaverX4Params = HexRobotSimMaverX4Params(),
     ) -> None:
+        """Create the Maver X4 sim chassis with default params."""
         super().__init__(params=params, name="Maver_x4")
 
     @classmethod
-    def _get_articulation_cfg(cls):
+    def _get_articulation_cfg(cls) -> ArticulationCfg:
+        """Return the Maver X4 USD `ArticulationCfg`."""
         from hex_isaac_usd.configs import HEX_ISAAC_USD_MAVER_X4_CFG
         return HEX_ISAAC_USD_MAVER_X4_CFG

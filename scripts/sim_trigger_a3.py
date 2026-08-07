@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """sim_trigger_a3.py — Trigger A3 chassis MIT smoke test.
 
-Usage::
+Example:
 
-    source shells/isaaclab2.1.1_env.sh
-    python pkg_hex/hex_sim_isaaclab_wrapper/scripts/sim_trigger_a3.py --headless --steps 300
+```bash
+source shells/isaaclab2.1.1_env.sh
+python pkg_hex/hex_sim_isaaclab_wrapper/scripts/sim_trigger_a3.py --headless --steps 300
+```
 
-Sends a constant MIT command (jnt_pos=0, jnt_vel=full(1.0), mit_kd=full(3.0))
-to all 3 omni-wheels and prints chassis state every 50 steps.
+Sends a constant MIT command (`jnt_pos=0`, `jnt_vel=full(1.0)`,
+`mit_kd=full(3.0)`) to all 3 omni-wheels and prints chassis state every 50
+steps.
 """
 
 import argparse
@@ -18,7 +21,13 @@ import numpy as np
 from hex_sim_isaaclab_wrapper import HexRobotSimTriggerA3, HexRobotSimTriggerA3Params
 
 
-def main():
+def main() -> None:
+    """Run the Trigger A3 MIT smoke test and print chassis state periodically.
+
+    Args:
+        --steps: Number of steps to run (0 = infinite).
+        --headless: Run without a GUI window.
+    """
     parser = argparse.ArgumentParser(description="Trigger A3 chassis sim smoke test")
     parser.add_argument("--steps", type=int, default=0, help="Steps (0=infinite)")
     parser.add_argument("--headless", action="store_true", help="Run without GUI window")

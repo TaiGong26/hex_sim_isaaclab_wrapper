@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
-"""sim_maver_x4_mit.py — Maver X4 逐关节 MIT 匹配测试.
+"""sim_maver_x4_mit.py — Maver X4 per-joint MIT matching test.
 
-单独对 8 个权威关节顺序中的每一个单独下发速度指令,读回 chassis state,
-验证『指令 index ↔ 权威关节名 ↔ USD 实际关节』三者匹配。
+For each of the 8 canonical joints individually, sends a velocity command on
+that joint alone, then reads back the chassis state to verify that the
+commanded index ↔ canonical joint name ↔ actual USD joint all match.
 
-Usage::
+Example:
 
-    source shells/isaaclab2.1.1_env.sh
-    python pkg_hex/hex_sim_isaaclab_wrapper/scripts/sim_maver_x4_mit.py --headless
+```bash
+source shells/isaaclab2.1.1_env.sh
+python pkg_hex/hex_sim_isaaclab_wrapper/scripts/sim_maver_x4_mit.py --headless
+```
 
-对每个 index i ∈ [0, 8):
-  下发 jnt_vel = e_i(仅 i 为 2.0,其余 0),step 若干步后读回状态,
-  断言读回的 velocity 中主导 index == i 且幅值足够大。
-预期: 每个轮子只在被命令时转动 ——
-  驱动轮 joint_wheel1..4(权威 indices [1,3,5,7])与转向 joint_yaw1..4(权威 indices [0,2,4,6])逐一匹配。
+For each index i ∈ [0, 8):
+- sends `jnt_vel = e_i` (index i is 2.0, all others 0), steps several times,
+  then reads back the state and asserts the dominant velocity index == i
+  with a sufficiently large magnitude.
+
+Expected: each wheel moves only when commanded — drive wheels
+`joint_wheel1..4` (canonical indices [1,3,5,7]) and steering joints
+`joint_yaw1..4` (canonical indices [0,2,4,6]) each match one-to-one.
 """
 
 import argparse
@@ -35,7 +41,15 @@ _VEL_THRESHOLD = 0.05
 _KD = np.asarray([20, 200, 20, 200, 20, 200, 20, 200], dtype=np.float64)
 
 
-def main():
+def main() -> int:
+    """Run the per-joint MIT matching test and print PASS/FAIL per index.
+
+    Args:
+        --headless: Run without a GUI window.
+
+    Returns:
+        Exit code: 0 if all joints PASS, 1 otherwise.
+    """
     parser = argparse.ArgumentParser(description="Maver X4 per-joint MIT matching test")
     parser.add_argument("--headless", action="store_true", help="Run without GUI window")
     args = parser.parse_args()

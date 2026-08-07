@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """sim_archer_y6.py — Archer Y6 joint cycling smoke test.
 
-Usage::
+Example:
 
-    source shells/isaaclab2.2.1_env.sh
-    python pkg_hex/hex_sim_isaaclab_wrapper/scripts/sim_archer_y6.py --steps 500
+```bash
+source shells/isaaclab2.2.1_env.sh
+python pkg_hex/hex_sim_isaaclab_wrapper/scripts/sim_archer_y6.py --steps 500
+```
 
 Simulation parameters (device, headless, num_envs, grip_type) are configured
-directly in HexRobotSimArcherY6Params below.
+directly in `HexRobotSimArcherY6Params` below.
 """
 
 import argparse
@@ -18,7 +20,13 @@ import numpy as np
 from hex_sim_isaaclab_wrapper import HexRobotSimArcherY6, HexRobotSimArcherY6Params
 
 
-def main():
+def main() -> None:
+    """Run the Archer Y6 joint cycling smoke test.
+
+    Args:
+        --steps: Number of steps to run (0 = infinite).
+        --headless: Run without a GUI window.
+    """
     parser = argparse.ArgumentParser(description="Archer Y6 sim smoke test")
     parser.add_argument("--steps", type=int, default=0, help="Steps (0=infinite)")
     parser.add_argument("--headless", action="store_true", help="Run without GUI window")

@@ -1,6 +1,6 @@
 """HexRobotSimTriggerA3 — simulated Trigger A3 chassis (3 omni-wheels).
 
-Canonical joint order (``JOINT_STATE_NAME``) is the three drive wheels only:
+Canonical joint order (`JOINT_STATE_NAME`) is the three drive wheels only:
 
     [joint_1, joint_2, joint_3]
 
@@ -8,9 +8,15 @@ The A3 USD carries 48 extra passive ball-caster joints (no actuator). They are
 not part of the canonical set and are ignored by the wrapper.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from .base import HexRobotSimChassis, HexRobotSimChassisParams
+
+if TYPE_CHECKING:
+    from isaaclab.assets import ArticulationCfg
 
 #: Canonical joint order — the three drive wheels only.
 JOINT_STATE_NAME = ["joint_1", "joint_2", "joint_3"]
@@ -31,9 +37,11 @@ class HexRobotSimTriggerA3(HexRobotSimChassis):
         self,
         params: HexRobotSimTriggerA3Params = HexRobotSimTriggerA3Params(),
     ) -> None:
+        """Create the Trigger A3 sim chassis with default params."""
         super().__init__(params=params, name="Trigger_a3")
 
     @classmethod
-    def _get_articulation_cfg(cls):
+    def _get_articulation_cfg(cls) -> ArticulationCfg:
+        """Return the Trigger A3 USD `ArticulationCfg`."""
         from hex_isaac_usd.configs import HEX_ISAAC_USD_TRIGGER_A3_CFG
         return HEX_ISAAC_USD_TRIGGER_A3_CFG

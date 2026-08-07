@@ -1,8 +1,19 @@
-"""HexRobotSimTriggerA3 — simulated Trigger A3 chassis (3 omni-wheels)."""
+"""HexRobotSimTriggerA3 — simulated Trigger A3 chassis (3 omni-wheels).
+
+Canonical joint order (``JOINT_STATE_NAME``) is the three drive wheels only:
+
+    [joint_1, joint_2, joint_3]
+
+The A3 USD carries 48 extra passive ball-caster joints (no actuator). They are
+not part of the canonical set and are ignored by the wrapper.
+"""
 
 from dataclasses import dataclass
 
 from .base import HexRobotSimChassis, HexRobotSimChassisParams
+
+#: Canonical joint order — the three drive wheels only.
+JOINT_STATE_NAME = ["joint_1", "joint_2", "joint_3"]
 
 
 @dataclass
@@ -14,6 +25,7 @@ class HexRobotSimTriggerA3(HexRobotSimChassis):
     """Simulated Trigger A3 (3 omni-wheels, single drive actuator)."""
 
     CHASSIS_NAME = "trigger_a3"
+    JOINT_STATE_NAME = JOINT_STATE_NAME
 
     def __init__(
         self,

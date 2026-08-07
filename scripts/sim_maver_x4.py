@@ -6,9 +6,11 @@ Usage::
     source shells/isaaclab2.1.1_env.sh
     python pkg_hex/hex_sim_isaaclab_wrapper/scripts/sim_maver_x4.py --headless --steps 300
 
-Sends a constant MIT command (jnt_pos=0, jnt_vel: drive wheels 4-7 → 1.0 rad/s,
-steering 0-3 → 0, mit_kd=full(3.0)) and prints chassis state every 50 steps.
-Joint order is articulation order: steering 0-3, drive 4-7.
+Sends a constant MIT command (jnt_pos=0, jnt_vel: drive wheels → 3.0 rad/s,
+steering → 0, mit_kd=full(3.0)) and prints chassis state every 50 steps.
+Joint order is the canonical (mujoco/urdf/ros2) order
+``[joint_yaw1, joint_wheel1, joint_yaw2, joint_wheel2, joint_yaw3, joint_wheel3,
+joint_yaw4, joint_wheel4]``: steering = indices [0,2,4,6], drive = [1,3,5,7].
 """
 
 import argparse
@@ -37,7 +39,7 @@ def main():
 
     dof = 8
     jnt_vel = np.zeros(dof)
-    jnt_vel[4:] = 3.0   # articulation order: steering 0-3, drive 4-7
+    jnt_vel[[1, 3, 5, 7]] = 3.0   # canonical order: drive = joint_wheel1..4
 
     count = 0
     freq_t0 = time.monotonic()

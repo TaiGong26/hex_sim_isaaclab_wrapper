@@ -1,9 +1,20 @@
-"""Base classes for simulated wheeled chassis robots.
+"""Base class for simulated wheeled chassis robots.
 
 Mirrors ``hex_driver_robot.robot_chassis.HexRobotChassisCallback``, but for
 simulation only: the same public API (``set_chs_mit_cmd`` / ``set_chs_vel_cmd``
 / ``get_chassis_state``) is backed by the lower-level ``SimInterface`` instead
 of a hardware ``Chassis`` device.
+
+Decoupling (mirrors the arm layer)
+----------------------------------
+- ``HexRobotSimBase`` (in ``arm/base.py``) provides the lifecycle only.
+- ``HexRobotSimChassis`` below holds the **common** chassis plumbing: step /
+  work loop / command message building / state publication / odometry.
+- Each chassis subclass declares its model-specific **canonical joint order**
+  via ``JOINT_STATE_NAME`` and its USD config via ``_get_articulation_cfg()``.
+  The wrapper resolves the USD's joints **by name** at spawn time, so it never
+  assumes the USD articulation order — the command / state arrays are always
+  in the robot's canonical order.
 """
 
 import math
@@ -29,7 +40,7 @@ from hex_util_runtime import HexRate, deque_helper
 
 from ..arm.base import HexRobotSimBase, HexRobotSimParams
 from ..sim.interface import ActuatorCmd
-from ..utils import build_header, build_hex_jnt, build_twist, build_vector3, torch_to_numpy
+from ..utils import build_header, build_hex_jnt, build_twist, build_vector3
 
 
 # ---------------------------------------------------------------------------
@@ -42,14 +53,74 @@ class HexRobotSimChassisParams(HexRobotSimParams):
 
 
 # ---------------------------------------------------------------------------
+# Module-level helper — canonical-order joint resolution (by name)
+# ---------------------------------------------------------------------------
+
+def _resolve_actuator_canonical_indices(articulation, joint_state_name: list[str]):
+    """Map each actuator's joints to their indices in the canonical order.
+
+    Returns ``{actuator_name: np.ndarray[int]}`` — for every actuator that owns
+    at least one canonical joint, the canonical indices of those joints, in the
+    actuator's **own** joint order (which matches the ``get_joint_*`` readback
+    and ``push_command`` write layout).
+
+    Matching is purely **by joint name**, so the wrapper does not depend on the
+    USD's articulation order — this is what makes the canonical order
+    (e.g. the mujoco-aligned Maver X4 order) authoritative.
+
+    Raises ``RuntimeError`` if:
+      - a canonical joint is missing from the articulation,
+      - a canonical joint is claimed by two actuators,
+      - an actuator that owns canonical joints also owns a non-canonical joint
+        (the command arrays would then be sized wrong for that actuator).
+    """
+    articulation_joint_names = list(articulation.joint_names)
+    missing = [n for n in joint_state_name if n not in articulation_joint_names]
+    if missing:
+        raise RuntimeError(
+            f"Articulation is missing canonical joints {missing}; "
+            f"articulation joints: {articulation_joint_names}")
+
+    name_to_canonical = {name: i for i, name in enumerate(joint_state_name)}
+
+    actuator_canonical: dict[str, np.ndarray] = {}
+    for actuator_name, actuator in articulation.actuators.items():
+        local_names = list(actuator.joint_names)
+        local_canonical = [name_to_canonical[n] for n in local_names
+                           if n in name_to_canonical]
+        if not local_canonical:
+            continue  # actuator owns only non-canonical joints — ignore it
+        extra = [n for n in local_names if n not in name_to_canonical]
+        if extra:
+            raise RuntimeError(
+                f"Actuator '{actuator_name}' owns non-canonical joints {extra}; "
+                f"canonical joint set: {joint_state_name}")
+        actuator_canonical[actuator_name] = np.asarray(
+            local_canonical, dtype=np.int64)
+
+    covered = np.concatenate(list(actuator_canonical.values())) \
+        if actuator_canonical else np.array([], dtype=np.int64)
+    if covered.size != len(joint_state_name) \
+            or np.unique(covered).size != len(joint_state_name):
+        raise RuntimeError(
+            f"Canonical joints are not uniquely covered by the actuators: "
+            f"expected {len(joint_state_name)} canonical indices, "
+            f"resolved {covered.tolist()}")
+
+    return actuator_canonical
+
+
+# ---------------------------------------------------------------------------
 # Chassis base
 # ---------------------------------------------------------------------------
 
 class HexRobotSimChassis(HexRobotSimBase):
     """Shared sim chassis — MIT command dispatch + odometry state publication.
 
-    Subclasses implement ``_get_articulation_cfg()`` (lazy USD config import)
-    and override ``CHASSIS_NAME``.
+    Subclasses implement ``_get_articulation_cfg()`` (lazy USD config import),
+    set ``CHASSIS_NAME``, and declare ``JOINT_STATE_NAME`` — the authoritative
+    joint order of this robot (used for both command dispatch and state
+    publication, and resolved against the USD **by joint name**).
 
     Usage::
 
@@ -71,6 +142,10 @@ class HexRobotSimChassis(HexRobotSimBase):
     #: Scene entity name used for spawn / articulation lookup (subclass sets).
     CHASSIS_NAME: str = ""
 
+    #: Canonical joint order — authoritative for command & state arrays.
+    #: Subclass MUST declare it (e.g. Maver X4's mujoco-aligned order).
+    JOINT_STATE_NAME: list[str] = []
+
     def __init__(self, params: HexRobotSimChassisParams, name: str) -> None:
         super().__init__(params=params, name=name)
 
@@ -84,11 +159,12 @@ class HexRobotSimChassis(HexRobotSimBase):
 
         # Resolved in init_robot()
         self._dof: int = 0
-        # Actuator names, ordered by first global joint index (articulation
-        # joint order); used as the iteration order for gather/scatter.
+        # Actuator names, ordered by first canonical index (iteration order for
+        # scatter/gather). The publish order is canonical, independent of this.
         self._actuator_names: list[str] = []
-        # Actuator name → the global indices of its joints (int64 array).
-        self._actuator_joint_indices: dict[str, np.ndarray] = {}
+        # Actuator name → canonical indices of its joints (in actuator-local
+        # joint order), resolved by name at spawn time.
+        self._actuator_canonical_idxs: dict[str, np.ndarray] = {}
         self._deque_dict: dict[str, Optional[deque]] = {}
         self._cur_cmd: dict[str, Optional[Any]] = {}
         self._cur_state: dict[str, Optional[dict]] = {}
@@ -104,7 +180,7 @@ class HexRobotSimChassis(HexRobotSimBase):
         self._cur_cmd = {"chs_cmd": None}
 
     # ------------------------------------------------------------------
-    # init_robot — spawn articulation + resolve DOF/actuator layout
+    # init_robot — spawn articulation + resolve canonical joint layout
     # ------------------------------------------------------------------
 
     def init_robot(self) -> None:
@@ -126,45 +202,27 @@ class HexRobotSimChassis(HexRobotSimBase):
         sim.spawn_robot(self.CHASSIS_NAME, articulation_cfg)
         sim.step()
 
-        # 4. Map each actuator to its global joint indices; order the actuator
-        #    names by first joint index ascending (articulation joint order),
-        #    never by dict insertion order.
+        # 4. Resolve this robot's canonical joint order (JOINT_STATE_NAME)
+        #    against the spawned articulation, **by joint name**. The USD
+        #    articulation order never matters — only that every canonical joint
+        #    exists and is uniquely owned by one actuator.
         articulation = sim._scene[self.CHASSIS_NAME]
-        actuator_names = list(articulation.actuators.keys())
-        self._actuator_joint_indices = {
-            actuator_name: torch_to_numpy(
-                articulation.actuators[actuator_name].joint_indices).astype(np.int64)
-            for actuator_name in actuator_names
-        }
-        self._actuator_names = sorted(
-            actuator_names,
-            key=lambda name: int(self._actuator_joint_indices[name][0]))
-
-        # 5. DOF = number of *actuated* joints (sum across actuator groups).
-        #    The articulation may contain extra unactuated joints (e.g. the A3
-        #    USD has 27 joints, only 3 actuated by ``drive_wheels``). This
-        #    matches the driver's ``motor_count`` (A3=3, X4=8).
-        self._dof = int(np.sum(
-            [self._actuator_joint_indices[name].size for name in self._actuator_names]))
-
-        # 6. Consistency — actuator joint indices must be non-overlapping and
-        #    lie within the articulation's joint array.
-        all_joint_indices = np.concatenate(
-            [self._actuator_joint_indices[name] for name in self._actuator_names])
-        if np.unique(all_joint_indices).size != all_joint_indices.size:
-            detail = ", ".join(
-                f"{name}={self._actuator_joint_indices[name].tolist()}"
-                for name in self._actuator_names)
-            raise AssertionError(f"Actuator joint indices overlap: {detail}")
-        articulation_dof = int(articulation.data.joint_pos.shape[-1])
-        if int(np.max(all_joint_indices)) >= articulation_dof:
-            detail = ", ".join(
-                f"{name}={self._actuator_joint_indices[name].tolist()}"
-                for name in self._actuator_names)
+        if not self.JOINT_STATE_NAME:
             raise AssertionError(
-                f"Actuator joint indices out of range [0, {articulation_dof}): {detail}")
+                f"{type(self).__name__} must declare JOINT_STATE_NAME "
+                "(the canonical joint order)")
+        self._actuator_canonical_idxs = _resolve_actuator_canonical_indices(
+            articulation, self.JOINT_STATE_NAME)
+        self._actuator_names = sorted(
+            self._actuator_canonical_idxs.keys(),
+            key=lambda name: int(self._actuator_canonical_idxs[name][0]))
 
-        # 7. State buffers
+        # 5. DOF = number of joints in the canonical order (= the actuated
+        #    joints). Unactuated USD joints (e.g. the A3's 48 passive
+        #    ball-casters) are outside the canonical set and stay untouched.
+        self._dof = len(self.JOINT_STATE_NAME)
+
+        # 6. State buffers
         self._cur_state = {
             "chs": {
                 "jnt_pos": np.zeros(self._dof),
@@ -174,8 +232,8 @@ class HexRobotSimChassis(HexRobotSimBase):
         }
         self.logi(
             f"Chassis '{self.CHASSIS_NAME}' dof={self._dof} "
-            f"actuators={self._actuator_names} "
-            f"joint_indices={self._actuator_joint_indices}")
+            f"joint_state_name={self.JOINT_STATE_NAME} "
+            f"actuator_canonical_idxs={self._actuator_canonical_idxs}")
 
     # ------------------------------------------------------------------
     # work_loop — heartbeat only (sim stepping stays on the main thread)
@@ -213,10 +271,10 @@ class HexRobotSimChassis(HexRobotSimBase):
 
         Args:
             cmd_dict: keys — ``jnt_pos``, ``jnt_vel``, ``mit_tau``, ``mit_kp``,
-                ``mit_kd``; each an array of shape (dof,) in **articulation
-                joint order** (X4: steering 0-3, drive 4-7; A3: joint_1..3 =
-                0-2).  Omitted fields keep the config's default PD (see
-                ``build_hex_jnt`` empty-array semantics below).
+                ``mit_kd``; each an array of shape (dof,) in **canonical joint
+                order** (this robot's ``JOINT_STATE_NAME``). Omitted fields
+                keep the config's default PD (see ``build_hex_jnt``
+                empty-array semantics below).
         """
         sim_time = self.get_sim_time()
         ts_ns = int(sim_time * 1e9) if sim_time is not None else None
@@ -282,9 +340,10 @@ class HexRobotSimChassis(HexRobotSimBase):
         """Slice a full MIT command into per-actuator ActuatorCmds.
 
         ``jnt_info`` is a ``HexDcBaseJntFull`` whose arrays are either size
-        ``self._dof`` (in articulation joint order) or empty (field omitted —
-        ``build_hex_jnt`` semantics).  Each actuator receives only its own
-        joint slice, gathered by its global joint indices.
+        ``self._dof`` (in **canonical joint order**) or empty (field omitted —
+        ``build_hex_jnt`` semantics). Each actuator receives only its own joint
+        slice, reordered from canonical order to the actuator's local joint
+        order via ``_actuator_canonical_idxs``.
         """
         def _extract_field(field_name: str) -> Optional[np.ndarray]:
             """Return the command's full-array field if present (size == dof),
@@ -305,31 +364,36 @@ class HexRobotSimChassis(HexRobotSimBase):
             return  # nothing to command
 
         for actuator_name in self._actuator_names:
-            joint_indices = self._actuator_joint_indices[actuator_name]
+            canonical_idxs = self._actuator_canonical_idxs[actuator_name]
             cmd = ActuatorCmd()
             for field, arr in command_fields.items():
                 if arr is not None:
-                    setattr(cmd, field, arr[joint_indices])
+                    setattr(cmd, field, arr[canonical_idxs])
             self._sim_interface.push_command(actuator=actuator_name, cmd=cmd)
 
     # ------------------------------------------------------------------
     # Internal — state update and publish (main-thread context)
     # ------------------------------------------------------------------
 
-    def _update_chs_state(self) -> None:
-        """Read joint state + odom from sim → build msg → push to callback deque."""
+    def _read_chs_joint_state(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Read per-actuator joint state, assembled into canonical order."""
         sim = self._sim_interface
-
-        # Joint state in articulation joint order (scatter by actuator jids)
         pos = np.zeros(self._dof)
         vel = np.zeros(self._dof)
         eff = np.zeros(self._dof)
         for actuator_name in self._actuator_names:
-            joint_indices = self._actuator_joint_indices[actuator_name]
-            pos[joint_indices] = sim.get_joint_positions(actuator_name)
-            vel[joint_indices] = sim.get_joint_velocities(actuator_name)
-            eff[joint_indices] = sim.get_joint_efforts(actuator_name)
+            canonical_idxs = self._actuator_canonical_idxs[actuator_name]
+            pos[canonical_idxs] = sim.get_joint_positions(actuator_name)
+            vel[canonical_idxs] = sim.get_joint_velocities(actuator_name)
+            eff[canonical_idxs] = sim.get_joint_efforts(actuator_name)
+        return pos, vel, eff
 
+    def _update_chs_state(self) -> None:
+        """Read joint state + odom from sim → build msg → push to callback deque."""
+        sim = self._sim_interface
+
+        # Joint state in canonical order (this robot's JOINT_STATE_NAME)
+        pos, vel, eff = self._read_chs_joint_state()
         self._cur_state["chs"]["jnt_pos"][:] = pos
         self._cur_state["chs"]["jnt_vel"][:] = vel
         self._cur_state["chs"]["jnt_eff"][:] = eff

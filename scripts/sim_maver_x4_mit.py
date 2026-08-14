@@ -18,8 +18,8 @@ For each index i ∈ [0, 8):
   with a sufficiently large magnitude.
 
 Expected: each wheel moves only when commanded — drive wheels
-`joint_wheel1..4` (canonical indices [1,3,5,7]) and steering joints
-`joint_yaw1..4` (canonical indices [0,2,4,6]) each match one-to-one.
+`joint_wheel1..4` (canonical indices [0,2,4,6]) and steering joints
+`joint_yaw1..4` (canonical indices [1,3,5,7]) each match one-to-one.
 """
 
 import argparse
@@ -38,7 +38,11 @@ _CMD_VEL = 2.0
 _VEL_THRESHOLD = 0.05
 # Per-joint MIT kd (steering yaw = 20, drive wheel = 200 — matches the cfg
 # actuator damping); kp = 0 so the command is pure velocity tracking.
-_KD = np.asarray([20, 200, 20, 200, 20, 200, 20, 200], dtype=np.float64)
+# Derived by name from `JOINT_STATE_NAME` so a canonical reordering cannot
+# silently misalign the kd with the joint type (wheel-first canonical).
+_KD = np.where(
+    [n.startswith("joint_wheel") for n in JOINT_STATE_NAME], 200.0, 20.0,
+).astype(np.float64)
 
 
 def main() -> int:

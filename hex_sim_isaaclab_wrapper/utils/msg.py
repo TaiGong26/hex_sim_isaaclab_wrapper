@@ -1,4 +1,4 @@
-"""Dataclass builders mirroring `hex_driver_robot` helpers."""
+"""Dataclass builders for `hex_util_msg` types."""
 
 from typing import Optional
 
@@ -28,8 +28,6 @@ def _ns_to_time(ts_ns: int) -> HexDcBaseTime:
 
 def build_header(ts_ns: Optional[int] = None) -> HexDcBaseHeader:
     """Build a header with the given (or current) nanosecond timestamp."""
-    
-    #### HACK: Use Sim Time
     if ts_ns is None:
         ts_ns = ns_now()
     return HexDcBaseHeader(stamp=_ns_to_time(int(ts_ns)))
@@ -93,7 +91,7 @@ def build_twist(
     linear: tuple[float, float, float] = (0.0, 0.0, 0.0),
     angular: tuple[float, float, float] = (0.0, 0.0, 0.0),
 ) -> HexDcBaseTwist:
-    """Build a `HexDcBaseTwist` from optional tuples (mirrors driver `_build_twist`)."""
+    """Build a `HexDcBaseTwist` from optional tuples."""
     return HexDcBaseTwist(
         linear=build_vector3(x=linear[0], y=linear[1], z=linear[2]),
         angular=build_vector3(x=angular[0], y=angular[1], z=angular[2]),

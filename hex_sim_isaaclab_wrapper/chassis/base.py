@@ -1,20 +1,20 @@
-"""Base class for simulated wheeled chassis robots.
+"""Shared base for simulated wheeled chassis robots.
 
-Mirrors `hex_driver_robot.robot_chassis.HexRobotChassisCallback`, but for
-simulation only: the same public API (`set_chs_mit_cmd` / `set_chs_vel_cmd`
-/ `get_chassis_state`) is backed by the lower-level `SimInterface` instead
-of a hardware `Chassis` device.
+The base holds the **common** plumbing — lifecycle, per-name
+joint resolution, state publication / odometry — plus a command-dispatch
+skeleton. Model-specific command types and their dispatch (e.g.
+direct-impedance MIT for Maver X4 / Trigger A3 H1) and the kinematic
+VEL→joint solver live in each robot subclass.
 
-## Decoupling (mirrors the arm layer)
+## Decoupling
 
 - `HexRobotSimBase` (in `arm/base.py`) provides the lifecycle only.
-- `HexRobotSimChassis` below holds the **common** chassis plumbing: step /
-  work loop / command message building / state publication / odometry.
-- Each chassis subclass declares its model-specific **canonical joint order**
-  via `JOINT_STATE_NAME` and its USD config via `_get_articulation_cfg()`.
-  The wrapper resolves the USD's joints **by name** at spawn time, so it never
-  assumes the USD articulation order — the command / state arrays are always
-  in the robot's canonical order.
+- `HexRobotSimChassis` below is a **thin** base: spawn, per-name joint
+  resolution, step / work loop, state reading + odometry, shared getters,
+  and a `_dispatch_chassis_command` hook.
+- Each chassis subclass declares `JOINT_STATE_NAME` (the canonical joint
+  order), owns its `set_*` command setters, its `_dispatch_chassis_command`
+  implementation, and its `_apply_chs_vel` kinematic solver.
 """
 
 from __future__ import annotations
@@ -73,8 +73,7 @@ def _resolve_actuator_canonical_indices(
     readback and `push_command` write layout).
 
     Matching is purely **by joint name**, so the wrapper does not depend on
-    the USD's articulation order — this is what makes the canonical order
-    (e.g. the mujoco-aligned Maver X4 order) authoritative.
+    the USD's articulation order.
 
     Args:
         articulation:     Spawned articulation whose joints are matched.
@@ -131,12 +130,12 @@ def _resolve_actuator_canonical_indices(
 # ---------------------------------------------------------------------------
 
 class HexRobotSimChassis(HexRobotSimBase):
-    """Shared sim chassis — MIT command dispatch + odometry state publication.
+    """Thin shared sim chassis — lifecycle + state publication + dispatch hook.
 
     Subclasses implement `_get_articulation_cfg()` (lazy USD config import),
-    set `CHASSIS_NAME`, and declare `JOINT_STATE_NAME` — the authoritative
-    joint order of this robot (used for both command dispatch and state
-    publication, and resolved against the USD **by joint name**).
+    set `CHASSIS_NAME`, declare `JOINT_STATE_NAME` (the authoritative joint
+    order), own their `set_*` command setters, and implement
+    `_dispatch_chassis_command()` for their model-specific command types.
 
     Example:
 
@@ -161,7 +160,7 @@ class HexRobotSimChassis(HexRobotSimBase):
     CHASSIS_NAME: str = ""
 
     #: Canonical joint order — authoritative for command & state arrays.
-    #: Subclass MUST declare it (e.g. Maver X4's mujoco-aligned order).
+    #: Subclass MUST declare it (e.g. Maver X4's wheel-first order).
     JOINT_STATE_NAME: list[str] = []
 
     def __init__(self, params: HexRobotSimChassisParams, name: str) -> None:
@@ -284,52 +283,32 @@ class HexRobotSimChassis(HexRobotSimBase):
             self.loge("State callback failure", exc_info=True)
 
     # ------------------------------------------------------------------
-    # Command setters — same signatures as hex_driver_robot
+    # Command setter — kinematic VEL (per-robot solver)
     # ------------------------------------------------------------------
 
-    def set_chs_mit_cmd(self, cmd_dict: dict[str, Any]) -> None:
-        """Queue a direct-impedance (MIT) command.
+    def set_chs_vel_cmd(self, vx: float, vy: float, omega: float) -> None:
+        """Queue a kinematic velocity command (body-frame twist).
+
+        The per-joint conversion is owned by the robot's `_apply_chs_vel`;
+        this setter only packages the twist into a `VEL`-mode chassis command.
 
         Args:
-            cmd_dict: keys — `jnt_pos`, `jnt_vel`, `mit_tau`, `mit_kp`,
-                `mit_kd`; each an array of shape (dof,) in **canonical joint
-                order** (this robot's `JOINT_STATE_NAME`). Omitted fields
-                keep the config's default PD (see `build_hex_jnt`
-                empty-array semantics below).
+            vx:     Forward body-frame velocity [m/s].
+            vy:     Lateral body-frame velocity [m/s].
+            omega:  Yaw (counter-clockwise positive) body-frame angular
+                velocity [rad/s].
         """
         sim_time = self.get_sim_time()
         ts_ns = int(sim_time * 1e9) if sim_time is not None else None
         cmd = HexDcRoboChsCtrlStamped(
             header=build_header(ts_ns),
             chs_ctrl=HexDcRoboChsCtrl(
-                ctrl_mode=HexDcRoboChsCtrlMode.MIT,
-                jnt=build_hex_jnt(
-                    pos=cmd_dict.get("jnt_pos"),
-                    vel=cmd_dict.get("jnt_vel"),
-                    eff=cmd_dict.get("mit_tau"),
-                    kp=cmd_dict.get("mit_kp"),
-                    kd=cmd_dict.get("mit_kd"),
-                    dof=self._dof,
-                ),
+                ctrl_mode=HexDcRoboChsCtrlMode.VEL,
+                jnt=build_hex_jnt(dof=0),
+                vel=build_twist(linear=(vx, vy, 0.0), angular=(0.0, 0.0, omega)),
             ),
         )
         self._deque_dict["chs_cmd"].append(cmd)
-
-    def set_chs_vel_cmd(self, cmd_dict: dict[str, Any]) -> None:
-        """Queue a kinematic velocity command — **not implemented**.
-
-        Kinematic control (vx, vy, omega) → per-joint MIT conversion is not
-        designed yet. Per user decision this raises immediately rather than
-        no-ops; use `set_chs_mit_cmd` instead.
-
-        Raises:
-            NotImplementedError: Always — VEL→MIT conversion is a TODO.
-        """
-        # TODO: kinematic control (vx, vy, omega) → per-joint MIT is not
-        # designed yet. User decision: raise immediately rather than no-op.
-        raise NotImplementedError(
-            "set_chs_vel_cmd (kinematic VEL) is not implemented; use set_chs_mit_cmd. "
-            "VEL→MIT conversion is a TODO.")
 
     # ------------------------------------------------------------------
     # State getter — same pattern as HexRobotSimArcherY6.get_arm_state
@@ -350,7 +329,13 @@ class HexRobotSimChassis(HexRobotSimBase):
     # ------------------------------------------------------------------
 
     def _process_chs_cmd(self) -> None:
-        """Convert latest chassis command to per-actuator ActuatorCmds."""
+        """Dispatch the latest chassis command.
+
+        Dispatch order:
+        1. Model-specific command (via `_dispatch_chassis_command` hook)
+        2. Generic VEL (kinematic twist → per-robot `_apply_chs_vel`)
+        3. NONE → no-op
+        """
         temp = deque_helper(self._deque_dict["chs_cmd"], latest=True)
         if temp is not None:
             self._cur_cmd["chs_cmd"] = temp
@@ -359,21 +344,44 @@ class HexRobotSimChassis(HexRobotSimBase):
         if cmd_stamped is None:
             return
 
+        # 1. Model-specific dispatch (subclass hook)
+        if self._dispatch_chassis_command(cmd_stamped):
+            return
+
+        # 2. Generic VEL / NONE
         ctrl = cmd_stamped.chs_ctrl
         mode = ctrl.ctrl_mode
-        if mode == HexDcRoboChsCtrlMode.MIT:
-            self._apply_chs_mit(ctrl.jnt)
-        # NONE → no-op; VEL never arrives (setter raises NotImplementedError),
-        # kept defensively.
+        if mode == HexDcRoboChsCtrlMode.VEL:
+            self._apply_chs_vel(ctrl.vel)
+        # NONE → no-op
+
+    def _dispatch_chassis_command(self, cmd: object) -> bool:
+        """Hook: dispatch a model-specific chassis command.
+
+        Override in subclasses (Maver / Trigger A3: direct-impedance MIT).
+        Return True if handled; False falls through to the generic VEL / NONE
+        dispatch.
+
+        Args:
+            cmd: The queued chassis command (e.g. `HexDcRoboChsCtrlStamped`).
+
+        Returns:
+            True if the command was handled by this subclass.
+        """
+        return False
 
     def _apply_chs_mit(self, jnt_info: HexDcBaseJntFull) -> None:
         """Slice a full MIT command into per-actuator ActuatorCmds.
 
-        `jnt_info` is a `HexDcBaseJntFull` whose arrays are either size
-        `self._dof` (in **canonical joint order**) or empty (field omitted —
-        `build_hex_jnt` semantics). Each actuator receives only its own joint
-        slice, reordered from canonical order to the actuator's local joint
-        order via `_actuator_canonical_idxs`.
+        Shared scatter primitive — robot-agnostic. `jnt_info` is a
+        `HexDcBaseJntFull` whose arrays are either size `self._dof` (in
+        **canonical joint order**) or empty (field omitted — `build_hex_jnt`
+        semantics). Each actuator receives only its own joint slice, reordered
+        from canonical order to the actuator's local joint order via
+        `_actuator_canonical_idxs`.
+
+        Args:
+            jnt_info: Full canonical-order MIT command fields.
         """
         def _extract_field(field_name: str) -> Optional[np.ndarray]:
             """Return the command's full-array field if present (size == dof),
@@ -459,7 +467,7 @@ class HexRobotSimChassis(HexRobotSimBase):
         self._callbacks["chs_state"](state_msg)
 
     # ------------------------------------------------------------------
-    # Subclass hook
+    # Subclass hooks
     # ------------------------------------------------------------------
 
     @classmethod
@@ -468,6 +476,19 @@ class HexRobotSimChassis(HexRobotSimBase):
         """Return the USD `ArticulationCfg` for this chassis.
 
         Import happens **inside** this method (AppLauncher is already up), so
-        `hex_isaac_usd.configs` eager-importing all configs is safe here.
+        eager-importing all configs here is safe.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def _apply_chs_vel(self, vel: HexDcBaseTwist) -> None:
+        """Kinematic VEL → per-joint command solver (per-robot).
+
+        Converts a velocity twist `vel` (vx / vy / omega) into this robot's
+        per-joint MIT targets (e.g. the Maver swerve inverse Jacobian or the
+        Trigger omni Jacobian).
+
+        Args:
+            vel: Velocity twist command (linear x/y, angular z).
         """
         raise NotImplementedError

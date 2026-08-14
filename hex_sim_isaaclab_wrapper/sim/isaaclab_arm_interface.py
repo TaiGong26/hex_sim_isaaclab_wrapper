@@ -332,7 +332,6 @@ class IsaacLabArmInterface(SimInterface):
                 articulation.write_joint_stiffness_to_sim(kp, joint_ids=jids)
                 articulation.write_joint_damping_to_sim(kd, joint_ids=jids)
 
-        # self._pending_cmds.clear()
 
     def set_joint_state(self, position: np.ndarray, velocity: np.ndarray) -> None:
         """Set joint positions/velocities directly, then reset the articulation.

@@ -1,6 +1,6 @@
 """hex_sim_isaaclab_wrapper — Simulator-backend robot wrapper (Isaac Lab V1).
 
-User-facing API aligned with `hex_driver_robot`:
+User-facing API:
   - `HexRobotSimArcherY6` / `HexRobotSimArcherY6Params`   (arm + grip)
   - `HexRobotSimTriggerA3` / `HexRobotSimTriggerA3Params` (Trigger A3 chassis)
   - `HexRobotSimMaverX4` / `HexRobotSimMaverX4Params`     (Maver X4 chassis)

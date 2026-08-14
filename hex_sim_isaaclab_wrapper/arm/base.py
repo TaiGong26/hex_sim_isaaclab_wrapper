@@ -3,9 +3,8 @@
 ## Model
 
 - `HexRobotSimParams` — pure simulation parameters (no hardware concepts).
-- `HexRobotSimBase` — abstract base with **work thread** (like
-  `hex_driver_robot`'s `HexRobotBase`). Users call `start()` to kick off
-  the background thread, then poll state via `get_arm_state()`.
+- `HexRobotSimBase` — abstract base with **work thread**. Users call `start()`
+  to kick off the background thread, then poll state via `get_arm_state()`.
   `stop()` joins the thread and cleans up the simulator.
 
 ## Lifecycle
@@ -57,9 +56,9 @@ class HexRobotSimParams:
         render_rate:      Rendering frequency [Hz]; interface converts to
                           `render_interval = round(ctrl_rate / render_rate)`.
         state_buffer_size: Number of state deque entries to retain.
-        num_envs:          Number of parallel environments (Isaac Lab).
-        device:            Torch device string (e.g. `"cuda:0"`, `"cpu"`).
-        headless:          Run without rendering window.
+        sim_num_envs:      Number of parallel environments (Isaac Lab).
+        torch_device:      Torch device string (e.g. `"cuda:0"`, `"cpu"`).
+        isaac_headless:    Run without rendering window.
     """
     ctrl_rate: float = 1000.0
     render_rate: float = 60.0
@@ -103,7 +102,7 @@ class HexRobotSimBase(ABC):
         self._sim_interface = None  # set by subclass in init_robot()
         self._log = setup_logger(name=name)
 
-        # Thread lifecycle (mirrors hex_driver_robot's HexRobotBase)
+        # Thread lifecycle
         self._stop_event = threading.Event()
         self._work_thread = threading.Thread(target=self.work_loop, daemon=True)
 

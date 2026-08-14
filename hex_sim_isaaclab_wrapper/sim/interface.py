@@ -1,7 +1,7 @@
 """SimInterface — simulator-agnostic abstraction.
 
 The interface exchanges data via **numpy** arrays (not torch) so that
-switching backends (Isaac Lab, Mujoco, …) never leaks a framework dependency.
+switching backends never leaks a framework dependency.
 
 Concrete implementations: `IsaacLabArmInterface` in `sim.isaaclab_arm_interface`
 and `IsaacLabChassisInterface` in `sim.isaaclab_chassis_interface`.
@@ -31,13 +31,6 @@ class ActuatorCmd:
     - `position` + `stiffness` / `damping` → ImplicitActuator PD target
     - `effort` → feed-forward torque override
     - `velocity` → velocity target
-
-    Attributes:
-        position:  Joint position target [rad].
-        velocity:  Joint velocity target [rad/s].
-        effort:    Feed-forward torque override [Nm].
-        stiffness: PD stiffness (kp).
-        damping:   PD damping (kd).
     """
     position:   Optional[np.ndarray] = None   # joint position target [rad]
     velocity:   Optional[np.ndarray] = None   # joint velocity target [rad/s]
@@ -105,7 +98,7 @@ class SimInterface(ABC):
         ...
 
     # ------------------------------------------------------------------
-    # State reading  (numpy out)  —  actuator required, no name
+    # State reading  (numpy out)  —  getters take an actuator name; robot name is stored internally
     # ------------------------------------------------------------------
 
     @abstractmethod
@@ -204,7 +197,7 @@ class SimInterface(ABC):
 
     @abstractmethod
     def get_sim_time(self) -> float:
-        """Return the physics timestep [s]."""
+        """Return the current simulation time [s] (elapsed, not per-step dt)."""
         ...
 
     # ------------------------------------------------------------------

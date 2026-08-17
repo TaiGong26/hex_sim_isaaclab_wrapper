@@ -17,7 +17,6 @@ articulation order itself never matters.
 This class owns its direct-impedance MIT command (`set_chs_mit_cmd`) and its
 dispatch (`_dispatch_chassis_command`); the shared chassis base only provides
 the lifecycle / state publication / odometry and a generic dispatch skeleton.
-The per-motor speed API of the Trigger A3 lr1 variant is blocked here.
 """
 
 from __future__ import annotations
@@ -81,23 +80,11 @@ class HexRobotSimMaverX4Params(HexRobotSimChassisParams):
     """Parameters for the simulated Maver X4 chassis."""
 
 
-class _UnsupportedPerMotorSpeedCommand:
-    """Descriptor that blocks the Trigger lr1-only API from Maver APIs."""
-
-    def __get__(self, instance, owner):
-        raise AttributeError(
-            "Maver chassis does not support set_chs_per_motor_spd_cmd; "
-            "use set_chs_mit_cmd instead"
-        )
-
-
 class HexRobotSimMaverX4(HexRobotSimChassis):
     """Simulated Maver X4 (4 steering + 4 drive MIT motors)."""
 
     CHASSIS_NAME = "maver_x4"
     JOINT_STATE_NAME = JOINT_STATE_NAME
-
-    set_chs_per_motor_spd_cmd = _UnsupportedPerMotorSpeedCommand()
 
     def __init__(
         self,

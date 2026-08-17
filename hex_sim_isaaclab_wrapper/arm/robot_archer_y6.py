@@ -26,7 +26,7 @@ from hex_util_msg.dataclass import (
     HexDcRoboGripState,
     HexDcRoboGripStateStamped,
 )
-from hex_util_runtime import HexRate, deque_helper, ns_now
+from hex_util_runtime import HexRate, deque_helper
 
 from ..sim.interface import ActuatorCmd
 from ..utils import build_header, build_hex_jnt, build_pose, torch_to_numpy
@@ -348,7 +348,7 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         self._deque_dict["arm_cmd"].append(cmd)
 
     def set_arm_pose_cmd(self, cmd_dict: dict[str, Any]) -> None:
-        """Set arm end-effector pose (EE) command — uses Isaac Lab IK.
+        """Set arm end-effector pose (EE) command
 
         Args:
             cmd_dict: Keys — `pose_pos` [x,y,z], `pose_quat` [w,x,y,z],

@@ -11,7 +11,7 @@ not part of the canonical set and are ignored by the wrapper.
 
 The simulated Trigger A3 uses 3 MIT motors with direct-impedance control. The
 lr1 variant (per-motor speed control, `set_chs_per_motor_spd_cmd`) is a
-different robot and is not modelled here — its API is blocked below.
+different robot and is not modelled here.
 """
 
 from __future__ import annotations
@@ -54,23 +54,11 @@ class HexRobotSimTriggerA3Params(HexRobotSimChassisParams):
     """Parameters for the simulated Trigger A3 chassis."""
 
 
-class _UnsupportedPerMotorSpeedCommand:
-    """Descriptor that blocks the Trigger lr1-only API from TriggerA3H1 APIs."""
-
-    def __get__(self, instance, owner):
-        raise AttributeError(
-            "TriggerA3H1 chassis does not support set_chs_per_motor_spd_cmd; "
-            "use set_chs_mit_cmd instead"
-        )
-
-
 class HexRobotSimTriggerA3(HexRobotSimChassis):
     """Simulated Trigger A3 (3 omni-wheels, single drive actuator, MIT)."""
 
     CHASSIS_NAME = "trigger_a3"
     JOINT_STATE_NAME = JOINT_STATE_NAME
-
-    set_chs_per_motor_spd_cmd = _UnsupportedPerMotorSpeedCommand()
 
     def __init__(
         self,

@@ -353,7 +353,7 @@ class HexRobotSimChassis(HexRobotSimBase):
         mode = ctrl.ctrl_mode
         if mode == HexDcRoboChsCtrlMode.VEL:
             self._apply_chs_vel(ctrl.vel)
-        # NONE → no-op
+            
 
     def _dispatch_chassis_command(self, cmd: object) -> bool:
         """Hook: dispatch a model-specific chassis command.

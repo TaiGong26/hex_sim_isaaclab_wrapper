@@ -15,8 +15,9 @@ articulation order itself never matters.
 ## Model-specific ownership
 
 This class owns its direct-impedance MIT command (`set_chs_mit_cmd`) and its
-dispatch (`_dispatch_chassis_command`); the shared chassis base only provides
-the lifecycle / state publication / odometry and a generic dispatch skeleton.
+`_apply_chs_vel` kinematic solver; the shared chassis base dispatches the
+queued command by `ctrl_mode` (MIT / VEL) and only provides lifecycle /
+state publication / odometry.
 """
 
 from __future__ import annotations
@@ -137,19 +138,6 @@ class HexRobotSimMaverX4(HexRobotSimChassis):
             ),
         )
         self._deque_dict["chs_cmd"].append(cmd)
-
-    # ------------------------------------------------------------------
-    # Model-specific dispatch
-    # ------------------------------------------------------------------
-
-    def _dispatch_chassis_command(self, cmd: object) -> bool:
-        """Dispatch the direct-impedance (MIT) command supported by Maver motors."""
-        if not isinstance(cmd, HexDcRoboChsCtrlStamped):
-            return False
-        if cmd.chs_ctrl.ctrl_mode != HexDcRoboChsCtrlMode.MIT:
-            return False
-        self._apply_chs_mit(cmd.chs_ctrl.jnt)
-        return True
 
     # ------------------------------------------------------------------
     # Kinematic VEL → MIT solver (velocity-level swerve)

@@ -9,9 +9,7 @@ not part of the canonical set and are ignored by the wrapper.
 
 ## Hardware mapping
 
-The simulated Trigger A3 uses 3 MIT motors with direct-impedance control. The
-lr1 variant (per-motor speed control, `set_chs_per_motor_spd_cmd`) is a
-different robot and is not modelled here.
+The simulated Trigger A3 uses 3 MIT motors with direct-impedance control. 
 """
 
 from __future__ import annotations
@@ -111,19 +109,6 @@ class HexRobotSimTriggerA3(HexRobotSimChassis):
             ),
         )
         self._deque_dict["chs_cmd"].append(cmd)
-
-    # ------------------------------------------------------------------
-    # Model-specific dispatch
-    # ------------------------------------------------------------------
-
-    def _dispatch_chassis_command(self, cmd: object) -> bool:
-        """Dispatch the direct-impedance (MIT) command supported by A3 motors."""
-        if not isinstance(cmd, HexDcRoboChsCtrlStamped):
-            return False
-        if cmd.chs_ctrl.ctrl_mode != HexDcRoboChsCtrlMode.MIT:
-            return False
-        self._apply_chs_mit(cmd.chs_ctrl.jnt)
-        return True
 
     # ------------------------------------------------------------------
     # Kinematic VEL → MIT solver (velocity-level omni)

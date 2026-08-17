@@ -1,20 +1,22 @@
 """Shared base for simulated wheeled chassis robots.
 
 The base holds the **common** plumbing — lifecycle, per-name
-joint resolution, state publication / odometry — plus a command-dispatch
-skeleton. Model-specific command types and their dispatch (e.g.
-direct-impedance MIT for Maver X4 / Trigger A3 H1) and the kinematic
-VEL→joint solver live in each robot subclass.
+joint resolution, state publication / odometry — and dispatches the
+queued chassis command by `ctrl_mode` (MIT direct-impedance / VEL
+kinematic twist). Model-specific command setters (e.g. the direct-
+impedance `set_chs_mit_cmd`) and the kinematic VEL→joint solver live in
+each robot subclass.
 
 ## Decoupling
 
 - `HexRobotSimBase` (in `arm/base.py`) provides the lifecycle only.
 - `HexRobotSimChassis` below is a **thin** base: spawn, per-name joint
-  resolution, step / work loop, state reading + odometry, shared getters,
-  and a `_dispatch_chassis_command` hook.
+  resolution, step / work loop, command dispatch (by `ctrl_mode`),
+  state reading + odometry, shared getters.
 - Each chassis subclass declares `JOINT_STATE_NAME` (the canonical joint
-  order), owns its `set_*` command setters, its `_dispatch_chassis_command`
-  implementation, and its `_apply_chs_vel` kinematic solver.
+  order), owns its `set_*` command setters, and implements the abstract
+  `_apply_chs_vel` kinematic solver (may also override the shared
+  `_apply_chs_mit` scatter if ever needed).
 """
 
 from __future__ import annotations
@@ -130,12 +132,12 @@ def _resolve_actuator_canonical_indices(
 # ---------------------------------------------------------------------------
 
 class HexRobotSimChassis(HexRobotSimBase):
-    """Thin shared sim chassis — lifecycle + state publication + dispatch hook.
+    """Thin shared sim chassis — lifecycle + state publication + command dispatch.
 
     Subclasses implement `_get_articulation_cfg()` (lazy USD config import),
     set `CHASSIS_NAME`, declare `JOINT_STATE_NAME` (the authoritative joint
-    order), own their `set_*` command setters, and implement
-    `_dispatch_chassis_command()` for their model-specific command types.
+    order), own their `set_*` command setters, and implement the abstract
+    `_apply_chs_vel` kinematic solver.
 
     Example:
 
@@ -311,7 +313,7 @@ class HexRobotSimChassis(HexRobotSimBase):
         self._deque_dict["chs_cmd"].append(cmd)
 
     # ------------------------------------------------------------------
-    # State getter — same pattern as HexRobotSimArcherY6.get_arm_state
+    # State getter
     # ------------------------------------------------------------------
 
     def get_chassis_state(self, latest: bool = True) -> Optional[HexDcRoboChsStateStamped]:
@@ -329,12 +331,14 @@ class HexRobotSimChassis(HexRobotSimBase):
     # ------------------------------------------------------------------
 
     def _process_chs_cmd(self) -> None:
-        """Dispatch the latest chassis command.
+        """Dispatch the latest chassis command by `ctrl_mode`.
 
-        Dispatch order:
-        1. Model-specific command (via `_dispatch_chassis_command` hook)
-        2. Generic VEL (kinematic twist → per-robot `_apply_chs_vel`)
-        3. NONE → no-op
+        - `MIT`  → `_apply_chs_mit` (direct-impedance scatter, shared)
+        - `VEL`  → `_apply_chs_vel` (per-robot kinematic solver)
+        - other  → no-op
+
+        Subclasses may override `_apply_chs_*` to extend handling; the
+        mode switch itself stays here.
         """
         temp = deque_helper(self._deque_dict["chs_cmd"], latest=True)
         if temp is not None:
@@ -344,31 +348,12 @@ class HexRobotSimChassis(HexRobotSimBase):
         if cmd_stamped is None:
             return
 
-        # 1. Model-specific dispatch (subclass hook)
-        if self._dispatch_chassis_command(cmd_stamped):
-            return
-
-        # 2. Generic VEL / NONE
         ctrl = cmd_stamped.chs_ctrl
         mode = ctrl.ctrl_mode
-        if mode == HexDcRoboChsCtrlMode.VEL:
+        if mode == HexDcRoboChsCtrlMode.MIT:
+            self._apply_chs_mit(ctrl.jnt)
+        elif mode == HexDcRoboChsCtrlMode.VEL:
             self._apply_chs_vel(ctrl.vel)
-            
-
-    def _dispatch_chassis_command(self, cmd: object) -> bool:
-        """Hook: dispatch a model-specific chassis command.
-
-        Override in subclasses (Maver / Trigger A3: direct-impedance MIT).
-        Return True if handled; False falls through to the generic VEL / NONE
-        dispatch.
-
-        Args:
-            cmd: The queued chassis command (e.g. `HexDcRoboChsCtrlStamped`).
-
-        Returns:
-            True if the command was handled by this subclass.
-        """
-        return False
 
     def _apply_chs_mit(self, jnt_info: HexDcBaseJntFull) -> None:
         """Slice a full MIT command into per-actuator ActuatorCmds.
@@ -436,9 +421,6 @@ class HexRobotSimChassis(HexRobotSimBase):
         self._cur_state["chs"]["jnt_vel"][:] = vel
         self._cur_state["chs"]["jnt_eff"][:] = eff
 
-        # Planar odom: body-frame twist from world velocity + yaw
-        # (quat is wxyz; yaw from qz,qw. World→body rotation is exact when
-        #  roll/pitch≈0, which is the chassis normal operating condition.)
         root_pos, root_quat = sim.get_root_pose()           # (3,), (4,) wxyz
         lin_vel_w, ang_vel_w = sim.get_root_velocity()      # world frame
         yaw = 2.0 * math.atan2(root_quat[3], root_quat[0])  # z, w

@@ -3,22 +3,22 @@
 ## Model
 
 - `HexRobotSimParams` — pure simulation parameters (no hardware concepts).
-- `HexRobotSimBase` — abstract base with **work thread**. Users call `start()`
-  to kick off the background thread, then poll state via `get_arm_state()`.
-  `stop()` joins the thread and cleans up the simulator.
+- `HexRobotSimBase` — abstract base, **main-thread driven**. Users call
+  `start()` to initialise the simulator, then poll state via
+  `get_arm_state()`. `stop()` closes the simulator.
 
 ## Lifecycle
 
 1. `robot = HexRobotSimArcherY6(params)` — constructor.
-2. `robot.start()` — calls `init_vars()` + `init_robot()`, then starts
-   the background `work_loop()` thread (non-blocking).
-3. (background) `work_loop()` runs at `ctrl_rate` via `HexRate`.
-4. `robot.stop()` — signals thread to exit, joins, closes sim.
+2. `robot.start()` — calls `init_vars()` + `init_robot()` (synchronous;
+   creates the Isaac Lab app on the calling thread).
+3. Main thread drives the sim:
+   `while robot.is_working(): robot.set_*(); robot.step()`.
+4. `robot.stop()` — closes the sim.
 """
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-import threading
 from typing import Any
 from ..tools.log import setup_logger
 
@@ -80,62 +80,49 @@ class HexRobotSimParams:
 # ---------------------------------------------------------------------------
 
 class HexRobotSimBase(ABC):
-    """Abstract sim robot — work-thread-based lifecycle.
+    """Abstract sim robot — main-thread-driven lifecycle.
 
     Example:
 
     ```python
     robot = HexRobotSimArcherY6(params)
-    robot.start()                     # non-blocking, kicks off thread
+    robot.start()                     # synchronous init
     while robot.is_working():
         robot.set_arm_pos_cmd({...})
         robot.step()                  # process → sim step → read state
         state = robot.get_arm_state()
         time.sleep(1.0 / params.ctrl_rate)
-    robot.stop()                      # joins thread, closes sim
+    robot.stop()                      # closes sim
     ```
     """
 
     def __init__(self, params: HexRobotSimParams, name: str) -> None:
-        """Store params, set up logging and the background work thread."""
+        """Store params and set up logging."""
         self._params = params
         self._sim_interface = None  # set by subclass in init_robot()
         self._log = setup_logger(name=name)
-
-        # Thread lifecycle
-        self._stop_event = threading.Event()
-        self._work_thread = threading.Thread(target=self.work_loop, daemon=True)
 
     # ------------------------------------------------------------------
     # Public lifecycle
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        """Initialize internal vars + robot, then start work thread."""
+        """Initialize internal vars + robot (synchronous, on this thread)."""
         self.init_vars()
         self.init_robot()
-        self._stop_event.clear()
-        self._work_thread.start()
-        self.logi("Work thread started.")
+        self.logi("Simulation initialized.")
 
     def stop(self) -> None:
-        """Signal thread to exit, join, and close sim interface."""
-        if self._stop_event.is_set():
+        """Close the sim interface (idempotent; no-op before `start()`)."""
+        if self._sim_interface is None:
             return
-        self._stop_event.set()
-        self._work_thread.join(timeout=5.0)
-        if self._work_thread.is_alive():
-            self.logw("Work thread did not exit within 5 s timeout.")
-        if self._sim_interface is not None:
-            self._sim_interface.close()
-            self._sim_interface = None
+        self._sim_interface.close()
+        self._sim_interface = None
         self.logi("Stopped.")
 
     def is_working(self) -> bool:
-        """Return True while the sim is running and stop not requested."""
-        if not self._sim_interface or not self._sim_interface.is_running():
-            return False
-        return not self._stop_event.is_set()
+        """Return True while the sim app is running."""
+        return self._sim_interface is not None and self._sim_interface.is_running()
 
     # ------------------------------------------------------------------
     # Subclass hooks
@@ -149,16 +136,6 @@ class HexRobotSimBase(ABC):
     @abstractmethod
     def init_robot(self) -> None:
         """Create and initialise the SimInterface, spawn robot(s) in scene."""
-        ...
-
-    @abstractmethod
-    def work_loop(self) -> None:
-        """Background thread body — called at `ctrl_rate` via `HexRate`.
-
-        > **Note:** Sim stepping should **not** be done here — call `step()`
-        from the main thread instead. Isaac Lab's `SimulationContext.step()`
-        expects to run on the same thread as the application event loop.
-        """
         ...
 
     @abstractmethod

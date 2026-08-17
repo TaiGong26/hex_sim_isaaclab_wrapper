@@ -26,7 +26,7 @@ from hex_util_msg.dataclass import (
     HexDcRoboGripState,
     HexDcRoboGripStateStamped,
 )
-from hex_util_runtime import HexRate, deque_helper
+from hex_util_runtime import deque_helper
 
 from ..sim.interface import ActuatorCmd
 from ..utils import build_header, build_hex_jnt, build_pose, torch_to_numpy
@@ -254,20 +254,6 @@ class HexRobotSimArcherY6(HexRobotSimBase):
 
         # 7. Store default joint positions (home)
         self._default_joint_pos = torch_to_numpy(articulation.data.default_joint_pos[0])
-
-    # ------------------------------------------------------------------
-    # work_loop — background thread body (heartbeat only, no sim ops)
-    # ------------------------------------------------------------------
-
-    def work_loop(self) -> None:
-        """Background heartbeat.
-
-        Sim stepping is done synchronously via `step()` on the main
-        thread to keep `SimulationContext.step()` on the event-loop thread.
-        """
-        rate = HexRate(self._params.ctrl_rate)
-        while self.is_working():
-            rate.sleep()
 
     # ------------------------------------------------------------------
     # step — synchronous sim pipeline (call from main thread)

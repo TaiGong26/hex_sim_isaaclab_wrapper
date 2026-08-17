@@ -41,7 +41,7 @@ from hex_util_msg.dataclass import (
     HexDcRoboChsState,
     HexDcRoboChsStateStamped,
 )
-from hex_util_runtime import HexRate, deque_helper
+from hex_util_runtime import deque_helper
 
 from ..arm.base import HexRobotSimBase, HexRobotSimParams
 from ..sim.interface import ActuatorCmd
@@ -256,20 +256,6 @@ class HexRobotSimChassis(HexRobotSimBase):
             f"Chassis '{self.CHASSIS_NAME}' dof={self._dof} "
             f"joint_state_name={self.JOINT_STATE_NAME} "
             f"actuator_canonical_idxs={self._actuator_canonical_idxs}")
-
-    # ------------------------------------------------------------------
-    # work_loop — heartbeat only (sim stepping stays on the main thread)
-    # ------------------------------------------------------------------
-
-    def work_loop(self) -> None:
-        """Background heartbeat.
-
-        Sim stepping is done synchronously via `step()` on the main thread
-        to keep `SimulationContext.step()` on the event-loop thread.
-        """
-        rate = HexRate(self._params.ctrl_rate)
-        while self.is_working():
-            rate.sleep()
 
     # ------------------------------------------------------------------
     # step — process → sim step → publish (call from main thread)

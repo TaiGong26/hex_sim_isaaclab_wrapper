@@ -354,30 +354,33 @@ class HexRobotSimChassis(HexRobotSimBase):
         Args:
             jnt_info: Full canonical-order MIT command fields.
         """
-        def _extract_field(field_name: str) -> Optional[np.ndarray]:
-            """Return the command's full-array field if present (size == dof),
-            else None (field omitted → keep config default)."""
-            arr = getattr(jnt_info, field_name)
-            if arr is None or arr.size != self._dof:
-                return None
-            return np.asarray(arr, dtype=np.float32)
-
-        command_fields = {
-            "position":  _extract_field("pos"),
-            "velocity":  _extract_field("vel"),
-            "effort":    _extract_field("eff"),
-            "stiffness": _extract_field("kp"),
-            "damping":   _extract_field("kd"),
-        }
-        if not any(v is not None for v in command_fields.values()):
-            return  # nothing to command
+        dof = self._dof
+        pos = np.asarray(jnt_info.pos, dtype=np.float32) \
+            if jnt_info.pos is not None and jnt_info.pos.size == dof else None
+        vel = np.asarray(jnt_info.vel, dtype=np.float32) \
+            if jnt_info.vel is not None and jnt_info.vel.size == dof else None
+        eff = np.asarray(jnt_info.eff, dtype=np.float32) \
+            if jnt_info.eff is not None and jnt_info.eff.size == dof else None
+        kp = np.asarray(jnt_info.kp, dtype=np.float32) \
+            if jnt_info.kp is not None and jnt_info.kp.size == dof else None
+        kd = np.asarray(jnt_info.kd, dtype=np.float32) \
+            if jnt_info.kd is not None and jnt_info.kd.size == dof else None
+        if all(v is None for v in (pos, vel, eff, kp, kd)):
+            return  # nothing to command — hold the previous pending cmd
 
         for actuator_name in self._actuator_names:
             canonical_idxs = self._actuator_canonical_idxs[actuator_name]
             cmd = ActuatorCmd()
-            for field, arr in command_fields.items():
-                if arr is not None:
-                    setattr(cmd, field, arr[canonical_idxs])
+            if pos is not None:
+                cmd.position = pos[canonical_idxs]
+            if vel is not None:
+                cmd.velocity = vel[canonical_idxs]
+            if eff is not None:
+                cmd.effort = eff[canonical_idxs]
+            if kp is not None:
+                cmd.stiffness = kp[canonical_idxs]
+            if kd is not None:
+                cmd.damping = kd[canonical_idxs]
             self._sim_interface.push_command(actuator=actuator_name, cmd=cmd)
 
     # ------------------------------------------------------------------

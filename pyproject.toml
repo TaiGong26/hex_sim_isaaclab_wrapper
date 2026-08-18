@@ -13,6 +13,7 @@ keywords = ["hex", "sim", "isaac-lab", "robot"]
 requires-python = ">=3.10"
 dependencies = [
   "hex_util_msg>=0.1.0a4,<0.2.0",
+  "hex_util_ros>=0.0.0,<0.1.0",
   "hex_util_runtime>=0.0.0,<0.1.0",
   "numpy>=1.0",
   "torch>=2.0",

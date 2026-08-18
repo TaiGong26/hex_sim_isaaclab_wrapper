@@ -88,15 +88,16 @@ def main() -> None:
         robot.step()
 
         # Actual state frequency over a rolling 50-step window.
-        if total % 50 == 0:
-            now = time.monotonic()
-            actual_hz = (total - freq_c0) / (now - freq_t0)
-            freq_t0, freq_c0 = now, total
-            arm_state = robot.get_arm_state()
-            if arm_state is not None:
-                print(f"[arm] {total}: jnt_len={len(arm_state.arm_state.jnt.position)} "
-                      f"ee_pos={arm_state.arm_state.pose.position} "
-                      f"actual_state_hz={actual_hz:.1f}", flush=True)
+        if count % 50 == 0:
+            st = robot.get_arm_state()
+            if st is not None:
+                arm_state = st.arm_state
+                print(f"[x4] {count}: jnt_len={len(arm_state.jnt.position)} \n"
+                        f"arm joint eff {arm_state.jnt.effort} \n"
+                        f"arm joint vel {arm_state.jnt.velocity} \n"
+                        f"arm joint pos {arm_state.jnt.position} \n"
+                        , flush=True)
+        
 
         count += 1
         time.sleep(1.0 / params.ctrl_rate)

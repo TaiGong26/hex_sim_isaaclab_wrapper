@@ -274,26 +274,32 @@ class HexRobotSimChassis(HexRobotSimBase):
     # Command setter — kinematic VEL (per-robot solver)
     # ------------------------------------------------------------------
 
-    def set_chs_vel_cmd(self, vx: float, vy: float, omega: float) -> None:
+    def set_chs_vel_cmd(self, cmd_dict: dict[str, Any]) -> None:
         """Queue a kinematic velocity command (body-frame twist).
 
         The per-joint conversion is owned by the robot's `_apply_chs_vel`;
         this setter only packages the twist into a `VEL`-mode chassis command.
 
         Args:
-            vx:     Forward body-frame velocity [m/s].
-            vy:     Lateral body-frame velocity [m/s].
-            omega:  Yaw (counter-clockwise positive) body-frame angular
-                velocity [rad/s].
+            cmd_dict: dict with optional keys:
+                ts_ns : int, timestamp (default: simulation time)
+                vx    : float, linear velocity x [m/s]
+                vy    : float, linear velocity y [m/s]
+                omega : float, angular velocity z [rad/s]
         """
         sim_time = self.get_sim_time()
-        ts_ns = int(sim_time * 1e9) if sim_time is not None else None
+        ts_ns = cmd_dict.get("ts_ns")
+        if ts_ns is None:
+            ts_ns = int(sim_time * 1e9) if sim_time is not None else None
         cmd = HexDcRoboChsCtrlStamped(
             header=build_header(ts_ns),
             chs_ctrl=HexDcRoboChsCtrl(
                 ctrl_mode=HexDcRoboChsCtrlMode.VEL,
                 jnt=build_hex_jnt(dof=0),
-                vel=build_twist(linear=(vx, vy, 0.0), angular=(0.0, 0.0, omega)),
+                vel=build_twist(
+                    linear=(cmd_dict.get("vx", 0.0), cmd_dict.get("vy", 0.0), 0.0),
+                    angular=(0.0, 0.0, cmd_dict.get("omega", 0.0)),
+                ),
             ),
         )
         self._deque_dict["chs_cmd"].append(cmd)
@@ -356,31 +362,25 @@ class HexRobotSimChassis(HexRobotSimBase):
         """
         dof = self._dof
         pos = np.asarray(jnt_info.pos, dtype=np.float32) \
-            if jnt_info.pos is not None and jnt_info.pos.size == dof else None
+            if jnt_info.pos is not None and jnt_info.pos.size == dof else np.zeros(dof)
         vel = np.asarray(jnt_info.vel, dtype=np.float32) \
-            if jnt_info.vel is not None and jnt_info.vel.size == dof else None
+            if jnt_info.vel is not None and jnt_info.vel.size == dof else np.zeros(dof)
         eff = np.asarray(jnt_info.eff, dtype=np.float32) \
-            if jnt_info.eff is not None and jnt_info.eff.size == dof else None
+            if jnt_info.eff is not None and jnt_info.eff.size == dof else np.zeros(dof)
         kp = np.asarray(jnt_info.kp, dtype=np.float32) \
-            if jnt_info.kp is not None and jnt_info.kp.size == dof else None
+            if jnt_info.kp is not None and jnt_info.kp.size == dof else np.zeros(dof)
         kd = np.asarray(jnt_info.kd, dtype=np.float32) \
-            if jnt_info.kd is not None and jnt_info.kd.size == dof else None
-        if all(v is None for v in (pos, vel, eff, kp, kd)):
-            return  # nothing to command — hold the previous pending cmd
+            if jnt_info.kd is not None and jnt_info.kd.size == dof else np.zeros(dof)
 
         for actuator_name in self._actuator_names:
             canonical_idxs = self._actuator_canonical_idxs[actuator_name]
-            cmd = ActuatorCmd()
-            if pos is not None:
-                cmd.position = pos[canonical_idxs]
-            if vel is not None:
-                cmd.velocity = vel[canonical_idxs]
-            if eff is not None:
-                cmd.effort = eff[canonical_idxs]
-            if kp is not None:
-                cmd.stiffness = kp[canonical_idxs]
-            if kd is not None:
-                cmd.damping = kd[canonical_idxs]
+            cmd = ActuatorCmd(
+                position=pos[canonical_idxs],
+                velocity=vel[canonical_idxs],
+                effort=eff[canonical_idxs],
+                stiffness=kp[canonical_idxs],
+                damping=kd[canonical_idxs],
+            )
             self._sim_interface.push_command(actuator=actuator_name, cmd=cmd)
 
     # ------------------------------------------------------------------

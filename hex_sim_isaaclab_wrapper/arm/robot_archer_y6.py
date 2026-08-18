@@ -515,14 +515,19 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         _arm_actuator_cmd.effort = eff + comp
 
         if mode == HexDcRoboArmCtrlMode.MIT:
-            if jnt_info.pos is not None and jnt_info.pos.size == dof:
-                _arm_actuator_cmd.position = np.asarray(jnt_info.pos, dtype=np.float32)
-            if jnt_info.kp is not None and jnt_info.kp.size == dof:
-                _arm_actuator_cmd.stiffness = np.asarray(jnt_info.kp, dtype=np.float32)
-            if jnt_info.kd is not None and jnt_info.kd.size == dof:
-                _arm_actuator_cmd.damping = np.asarray(jnt_info.kd, dtype=np.float32)
-            if jnt_info.vel is not None and jnt_info.vel.size == dof:
-                _arm_actuator_cmd.velocity = np.asarray(jnt_info.vel, dtype=np.float32)
+            # which writes 0 for every None region of a MIT command.
+            _arm_actuator_cmd.position = np.asarray(jnt_info.pos, dtype=np.float32) \
+                if jnt_info.pos is not None and jnt_info.pos.size == dof \
+                else np.zeros(dof, dtype=np.float32)
+            _arm_actuator_cmd.stiffness = np.asarray(jnt_info.kp, dtype=np.float32) \
+                if jnt_info.kp is not None and jnt_info.kp.size == dof \
+                else np.zeros(dof, dtype=np.float32)
+            _arm_actuator_cmd.damping = np.asarray(jnt_info.kd, dtype=np.float32) \
+                if jnt_info.kd is not None and jnt_info.kd.size == dof \
+                else np.zeros(dof, dtype=np.float32)
+            _arm_actuator_cmd.velocity = np.asarray(jnt_info.vel, dtype=np.float32) \
+                if jnt_info.vel is not None and jnt_info.vel.size == dof \
+                else np.zeros(dof, dtype=np.float32)
 
         elif mode == HexDcRoboArmCtrlMode.JNT:
             if jnt_info.pos is None or jnt_info.pos.size != dof:
@@ -543,10 +548,9 @@ class HexRobotSimArcherY6(HexRobotSimBase):
             self._set_position_interp_command(
                 _arm_actuator_cmd, np.asarray(tar_pos, dtype=np.float32), jnt_info, dof)
 
-        # Push only if at least one field was set
-        if any(v is not None for v in
-               [_arm_actuator_cmd.position, _arm_actuator_cmd.velocity, _arm_actuator_cmd.effort, _arm_actuator_cmd.stiffness, _arm_actuator_cmd.damping]):
-            self._sim_interface.push_command(actuator=self._arm_actuator, cmd=_arm_actuator_cmd)
+        # All fields are always set (value or zeros) in every mode, so the
+        # command is always pushed — a full MIT-form write each step.
+        self._sim_interface.push_command(actuator=self._arm_actuator, cmd=_arm_actuator_cmd)
 
     def _ik_target(self, arm_ctrl: HexDcRoboArmCtrl) -> tuple[bool, np.ndarray]:
         """Run analytic IK on an EE pose command → (success, target positions).

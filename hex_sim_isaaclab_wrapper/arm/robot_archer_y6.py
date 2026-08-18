@@ -180,7 +180,7 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         cli_args = ["--headless"] if bool(self._params.isaac_headless) else []
         sim = IsaacLabArmInterface()
         sim.initialize(cli_args=cli_args, device=self._params.torch_device,
-                       dt=self._params.ctrl_rate, num_envs=self._params.sim_num_envs,
+                       num_envs=1, dt=self._params.ctrl_rate,
                        sim_env=self._params.sim_env,
                        render_rate=self._params.render_rate)
         self._sim_interface = sim

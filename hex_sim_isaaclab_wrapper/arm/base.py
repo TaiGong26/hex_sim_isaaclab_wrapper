@@ -56,14 +56,12 @@ class HexRobotSimParams:
         render_rate:      Rendering frequency [Hz]; interface converts to
                           `render_interval = round(ctrl_rate / render_rate)`.
         state_buffer_size: Number of state deque entries to retain.
-        sim_num_envs:      Number of parallel environments (Isaac Lab).
         torch_device:      Torch device string (e.g. `"cuda:0"`, `"cpu"`).
         isaac_headless:    Run without rendering window.
     """
     ctrl_rate: float = 1000.0
     render_rate: float = 60.0
     state_buffer_size: int = 100
-    sim_num_envs: int = 1
     torch_device: str = "cuda:0"
     isaac_headless: bool = False
 

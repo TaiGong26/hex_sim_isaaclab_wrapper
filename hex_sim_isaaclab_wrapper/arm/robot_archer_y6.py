@@ -702,7 +702,7 @@ def _import_articulation_cfg(grip_type: str) -> ArticulationCfg:
     isaaclab imports are safe here.
     """
     key = _GRIP_TO_USD.get(grip_type, "HEX_ISAAC_USD_ARCHER_Y6_GR100_CFG")
-    from hex_isaac_usd.configs import (
+    from hex_isaac_usd.isaaclab_cfg import (
         HEX_ISAAC_USD_ARCHER_Y6_CFG,
         HEX_ISAAC_USD_ARCHER_Y6_GR100_CFG,
     )

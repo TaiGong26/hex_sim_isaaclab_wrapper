@@ -156,5 +156,5 @@ class HexRobotSimTriggerA3(HexRobotSimChassis):
     @classmethod
     def _get_articulation_cfg(cls) -> ArticulationCfg:
         """Return the Trigger A3 USD `ArticulationCfg`."""
-        from hex_isaac_usd.configs import HEX_ISAAC_USD_TRIGGER_A3_CFG
+        from hex_isaac_usd.isaaclab_cfg import HEX_ISAAC_USD_TRIGGER_A3_CFG
         return HEX_ISAAC_USD_TRIGGER_A3_CFG

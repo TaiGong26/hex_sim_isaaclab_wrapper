@@ -14,9 +14,21 @@ class LevelFormatter(logging.Formatter):
     """
 
     def __init__(self) -> None:
+        """Initialize the level-aware formatter; format is chosen in `format()`."""
         super().__init__()
 
     def format(self, record: logging.LogRecord) -> str:
+        """Format the record with a level-specific format string.
+
+        DEBUG records get a verbose format (full date, file/line); all other
+        levels get a compact format with short time.
+
+        Args:
+            record: Log record to format.
+
+        Returns:
+            The formatted log line.
+        """
         if record.levelno == logging.DEBUG:
             fmt = (
                 "%(asctime)s [%(levelname)s] [%(filename)s:%(lineno)d] "
@@ -41,7 +53,7 @@ def setup_logger(name: str = "", log_file: Optional[str] = None) -> logging.Logg
         log_file: Optional path to a log file.
 
     Returns:
-        Configured :class:`logging.Logger` instance.
+        Configured `logging.Logger` instance.
     """
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)

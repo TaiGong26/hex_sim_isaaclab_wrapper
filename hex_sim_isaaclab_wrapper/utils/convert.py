@@ -8,12 +8,12 @@ import torch
 # Numpy ↔ torch
 # ---------------------------------------------------------------------------
 
-def torch_to_numpy(tensor) -> np.ndarray:
+def torch_to_numpy(tensor: torch.Tensor) -> np.ndarray:
     """Convert a torch tensor to a numpy ndarray (detached, CPU)."""
     return tensor.detach().cpu().numpy()
 
 
-def numpy_to_torch(arr: np.ndarray, device: str = "cpu"):
+def numpy_to_torch(arr: np.ndarray, device: str = "cpu") -> torch.Tensor:
     """Convert a numpy ndarray to a torch tensor on the given device."""
     return torch.from_numpy(arr.astype(np.float32)).to(device)
 
@@ -26,7 +26,7 @@ def numpy_to_torch(arr: np.ndarray, device: str = "cpu"):
 def quat_rotate(q: np.ndarray, v: np.ndarray) -> np.ndarray:
     """Rotate vector *v* by quaternion *q* (wxyz format).
 
-    Equivalent to ``p * v * p^{-1}`` where *p* is the unit quaternion.
+    Equivalent to `p * v * p^{-1}` where *p* is the unit quaternion.
     """
     w, x, y, z = q[0], q[1], q[2], q[3]
     vx, vy, vz = v[0], v[1], v[2]

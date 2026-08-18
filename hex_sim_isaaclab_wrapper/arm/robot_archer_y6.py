@@ -1,19 +1,19 @@
 """HexRobotSimArcherY6 — simulation-only Archer Y6 robot.
 
-API aligned with ``hex_driver_robot.robot_archer_y6.HexRobotArcherY6``
-(but only simulation-relevant methods, no hardware).
-
 V1 scope: 6-DOF arm + optional GR100 gripper (8-DOF USD).
 """
 
+from __future__ import annotations
+
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 from hex_util_ros import HexDynUtilY6, interp_joint
 
 from hex_util_msg.dataclass import (
+    HexDcBaseJntFull,
     HexDcBaseJntState,
     HexDcRoboArmCtrl,
     HexDcRoboArmCtrlMode,
@@ -26,18 +26,21 @@ from hex_util_msg.dataclass import (
     HexDcRoboGripState,
     HexDcRoboGripStateStamped,
 )
-from hex_util_runtime import HexRate, deque_helper, ns_now
+from hex_util_runtime import deque_helper
 
 from ..sim.interface import ActuatorCmd
 from ..utils import build_header, build_hex_jnt, build_pose, torch_to_numpy
 from .base import HexRobotSimBase, HexRobotSimParams
+
+if TYPE_CHECKING:
+    from isaaclab.assets import ArticulationCfg
 
 
 # ---------------------------------------------------------------------------
 # Module-level constants
 # ---------------------------------------------------------------------------
 
-# USD config aliases — values match key names in hex_isaac_usd.configs
+#: Grip variant → articulation config key.
 _GRIP_TO_USD: dict[str, str] = {
     "empty": "HEX_ISAAC_USD_ARCHER_Y6_CFG",
     "gp80": "HEX_ISAAC_USD_ARCHER_Y6_GR100_CFG",
@@ -45,12 +48,12 @@ _GRIP_TO_USD: dict[str, str] = {
     "gp100": "HEX_ISAAC_USD_ARCHER_Y6_GR100_CFG",
 }
 
-# JNT/EE position-interpolation default max joint velocity [rad/s], used when
-# the command omits ``lim_vel`` (mirrors hex_driver_robot's default).
+#: JNT/EE position-interpolation default max joint velocity [rad/s], used when
+#: the command omits ``lim_vel``.
 _ARM_LIM_VEL_DEFAULT = 5.0
 
-# Per-arm pose link names (resolved in init_robot). The base link is the arm's
-# first link frame; the EE link is the last link of the arm chain.
+#: Per-arm pose link names (resolved in init_robot). The base link is the arm's
+#: first link frame; the EE link is the last link of the arm chain.
 _ARM_BASE_LINK = "base_link"
 _ARM_EE_LINK = "link_6"
 
@@ -61,7 +64,13 @@ _ARM_EE_LINK = "link_6"
 
 @dataclass
 class HexRobotSimArcherY6Params(HexRobotSimParams):
-    """Parameters for simulated Archer Y6 (no hardware concepts)."""
+    """Parameters for simulated Archer Y6 (no hardware concepts).
+
+    Attributes:
+        grip_type:  Grip variant — `"gp80"`, `"gr100"`, or `"empty"`.
+        urdf_path:  URDF for EE-mode analytic IK (`HexDynUtilY6`); `None`
+                    disables EE/IK.
+    """
     grip_type: str = "gp80"       # "gp80", "gr100", "empty"
     # URDF for EE-mode analytic IK (HexDynUtilY6); None disables EE/IK.
     urdf_path: Optional[str] = None
@@ -74,23 +83,26 @@ class HexRobotSimArcherY6Params(HexRobotSimParams):
 class HexRobotSimArcherY6(HexRobotSimBase):
     """Simulation-only Archer Y6 robot.
 
-    Usage::
+    Example:
 
-        params = HexRobotSimArcherY6Params(torch_device="cuda:0", headless=False)
-        robot = HexRobotSimArcherY6(params)
-        robot.start()
+    ```python
+    params = HexRobotSimArcherY6Params(torch_device="cuda:0", isaac_headless=False)
+    robot = HexRobotSimArcherY6(params)
+    robot.start()
 
-        while robot.is_working():
-            robot.set_arm_pos_cmd({"jnt_pos": [0.0, -1.5, 3.0, 0.0, 0.0, 0.0]})
-            time.sleep(1.0 / params.ctrl_rate)
+    while robot.is_working():
+        robot.set_arm_pos_cmd({"jnt_pos": [0.0, -1.5, 3.0, 0.0, 0.0, 0.0]})
+        time.sleep(1.0 / params.ctrl_rate)
 
-        robot.stop()
+    robot.stop()
+    ```
     """
 
     def __init__(
         self,
         params: HexRobotSimArcherY6Params = HexRobotSimArcherY6Params(),
     ) -> None:
+        """Create the Archer Y6 sim robot with default params."""
         super().__init__(params=params, name="Archer_y6")
         # State deques for user polling
         self._deque_user: dict[str, deque] = {
@@ -131,15 +143,15 @@ class HexRobotSimArcherY6(HexRobotSimBase):
 
         DOF counts and the state/PD buffers sized by them are resolved in
         init_robot(), after the USD config is loaded — dof_dict comes from the
-        config's actuators. ``_cur_state`` stays ``{}`` until then.
+        config's actuators. `_cur_state` stays `{}` until then.
         """
         self._deque_dict = {
             "arm_cmd": deque(maxlen=self._params.state_buffer_size),
         }
         self._cur_cmd = {"arm_cmd": None, "grip_cmd": None}
 
-        # EE-mode analytic IK (same config as the Mujoco reference); disabled
-        # when no URDF is configured (urdf_path=None → EE commands are skipped).
+        # EE-mode analytic IK; disabled when no URDF is configured
+        # (urdf_path=None → EE commands are skipped).
         if self._params.urdf_path is not None:
             self._dyn_util = HexDynUtilY6(
                 model_path=self._params.urdf_path,
@@ -155,13 +167,22 @@ class HexRobotSimArcherY6(HexRobotSimBase):
     # ------------------------------------------------------------------
 
     def init_robot(self) -> None:
+        """Create the Isaac Lab interface and spawn the robot.
+
+        Initializes the arm interface, spawns `archer_y6` from the selected
+        `ArticulationCfg`, then resolves actuator names, DOF counts, default
+        PD gains, and per-arm base/EE body indices from the spawned
+        articulation. Also allocates the state / PD buffers sized by DOF.
+        """
         # 1. Create Isaac Lab interface — *first* to satisfy AppLauncher
         from ..sim.isaaclab_arm_interface import IsaacLabArmInterface
 
         cli_args = ["--headless"] if bool(self._params.isaac_headless) else []
         sim = IsaacLabArmInterface()
-        sim.initialize(cli_args=cli_args, device=self._params.torch_device,dt = self._params.ctrl_rate,
-                        num_envs=self._params.sim_num_envs, sim_env=self._params.sim_env)
+        sim.initialize(cli_args=cli_args, device=self._params.torch_device,
+                       dt=self._params.ctrl_rate, num_envs=self._params.sim_num_envs,
+                       sim_env=self._params.sim_env,
+                       render_rate=self._params.render_rate)
         self._sim_interface = sim
 
         # 2. Now safe to import articulation configs (AppLauncher active)
@@ -210,7 +231,7 @@ class HexRobotSimArcherY6(HexRobotSimBase):
                 "jnt_eff": np.zeros(dof["grip"]),
             }
 
-        # Set Default Kp Kd
+        # Set default kp/kd.
         arm_actuator_cfg = articulation.actuators[self._arm_actuator]
         self._arm_kp_default = torch_to_numpy(arm_actuator_cfg.stiffness[0]).copy()
         self._arm_kd_default = torch_to_numpy(arm_actuator_cfg.damping[0]).copy()
@@ -224,7 +245,6 @@ class HexRobotSimArcherY6(HexRobotSimBase):
             f"kd={self._arm_kd_default.tolist()}")
 
         # 6. Resolve per-arm base/EE body indices for state FK
-        ### HACK: Temporary solution. A better approach will be needed later to handle the end-effector IK/solver issue.
         from isaaclab.managers import SceneEntityCfg
         base_body_cfg = SceneEntityCfg("archer_y6", body_names=[_ARM_BASE_LINK])
         base_body_cfg.resolve(sim._scene)
@@ -234,20 +254,6 @@ class HexRobotSimArcherY6(HexRobotSimBase):
 
         # 7. Store default joint positions (home)
         self._default_joint_pos = torch_to_numpy(articulation.data.default_joint_pos[0])
-
-    # ------------------------------------------------------------------
-    # work_loop — background thread body (heartbeat only, no sim ops)
-    # ------------------------------------------------------------------
-
-    def work_loop(self) -> None:
-        """Background heartbeat.
-
-        Sim stepping is done synchronously via :meth:`step` on the main
-        thread to keep ``SimulationContext.step()`` on the event-loop thread.
-        """
-        rate = HexRate(self._params.ctrl_rate)
-        while self.is_working():
-            rate.sleep()
 
     # ------------------------------------------------------------------
     # step — synchronous sim pipeline (call from main thread)
@@ -271,14 +277,15 @@ class HexRobotSimArcherY6(HexRobotSimBase):
             self.loge("State callback failure", exc_info=True)
 
     # ------------------------------------------------------------------
-    # Command setters — same signatures as real HexRobotArcherY6
+    # Command setters
     # ------------------------------------------------------------------
 
     def set_arm_mit_cmd(self, cmd_dict: dict[str, Any]) -> None:
         """Set arm direct-impedance (MIT) command.
 
         Args:
-            cmd_dict: keys — ts_ns, jnt_pos, jnt_vel, mit_tau, mit_kp, mit_kd, grav
+            cmd_dict: Keys — `jnt_pos`, `jnt_vel`, `mit_tau`,
+                      `mit_kp`, `mit_kd`, `grav`.
         """
         sim_time = self.get_sim_time()
         sim_time = int(sim_time*1e9) if sim_time is not None else None
@@ -303,7 +310,8 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         """Set arm joint-position (JNT) command.
 
         Args:
-            cmd_dict: keys — ts_ns, jnt_pos, jnt_eff, lim_vel, lim_acc, grav
+            cmd_dict: Keys — `jnt_pos`, `jnt_eff`, `lim_vel`,
+                      `lim_acc`, `grav`.
         """
         sim_time = self.get_sim_time()
         sim_time = int(sim_time*1e9) if sim_time is not None else None
@@ -326,11 +334,11 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         self._deque_dict["arm_cmd"].append(cmd)
 
     def set_arm_pose_cmd(self, cmd_dict: dict[str, Any]) -> None:
-        """Set arm end-effector pose (EE) command — uses Isaac Lab IK.
+        """Set arm end-effector pose (EE) command
 
         Args:
-            cmd_dict: keys — ts_ns, pose_pos [x,y,z], pose_quat [w,x,y,z],
-                      jnt_eff, lim_vel, lim_acc, grav
+            cmd_dict: Keys — `pose_pos` [x,y,z], `pose_quat` [w,x,y,z],
+                      `jnt_eff`, `lim_vel`, `lim_acc`, `grav`.
         """
         sim_time = self.get_sim_time()
         sim_time = int(sim_time*1e9) if sim_time is not None else None
@@ -358,7 +366,7 @@ class HexRobotSimArcherY6(HexRobotSimBase):
     def set_grip_mit_cmd(self, cmd_dict: dict[str, Any]) -> None:
         """Set grip direct-impedance (MIT) command.
 
-        In simulation, only ``jnt_pos`` drives the PD target.
+        In simulation, only `jnt_pos` drives the PD target.
         """
         if not self._has_grip:
             return
@@ -385,7 +393,8 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         """Set grip joint-position (JNT) command.
 
         Args:
-            cmd_dict: keys — ts_ns, jnt_pos, jnt_eff (max torque), lim_vel
+            cmd_dict: Keys — `jnt_pos`, `jnt_eff` (max torque),
+                      `lim_vel`.
         """
         if not self._has_grip:
             return
@@ -409,7 +418,7 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         """Set grip torque (TAU) command.
 
         Args:
-            cmd_dict: keys — ts_ns, jnt_eff (target torque), lim_vel
+            cmd_dict: Keys — `jnt_eff` (target torque), `lim_vel`.
         """
         if not self._has_grip:
             return
@@ -429,7 +438,7 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         self._deque_dict["grip_cmd"].append(cmd)
 
     # ------------------------------------------------------------------
-    # State getters — same signatures as real HexRobotArcherY6
+    # State getters
     # ------------------------------------------------------------------
 
     def get_arm_state(self, latest: bool = True) -> Optional[HexDcRoboArmStateStamped]:
@@ -447,11 +456,11 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         return dict(self._dof_dict)
 
     def get_arm_ee_pose(self, arm_name: str = "arm") -> Optional[tuple[np.ndarray, np.ndarray]]:
-        """Return ``(pos, quat)`` of an arm's EE relative to its baselink, or None.
+        """Return `(pos, quat)` of an arm's EE relative to its baselink, or None.
 
-        ``arm_name`` defaults to ``"arm"`` for the single-arm robot; the dict
-        lookup is ready for future dual-arm names. Returns ``None`` if the arm
-        is unknown or the sim interface is not yet initialized.
+        `arm_name` defaults to `"arm"` for the single-arm robot; the dict lookup
+        is ready for future dual-arm names. Returns `None` if the arm is unknown
+        or the sim interface is not yet initialized.
         """
         refs = self._arm_refs.get(arm_name)
         if refs is None or self._sim_interface is None:
@@ -476,13 +485,12 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         target and PD source differ:
 
         - MIT: user pos/kp/kd/vel passed through unchanged (no interpolation).
-        - JNT: commanded position first ``interp_joint``-interpolated toward
+        - JNT: commanded position first `interp_joint`-interpolated toward
           the target, then the **load-time default PD** is restored.
-        - EE: pose command resolved by analytic IK (requires ``urdf_path``),
+        - EE: pose command resolved by analytic IK (requires `urdf_path`),
           then the same interpolation + default PD as JNT.
 
-        Gravity/Coriolis compensation is **ADDed** to effort in every mode
-        (mirrors mujoco's ``+ __cur_comp`` in all three branches).
+        Gravity/Coriolis compensation is **ADDed** to effort in every mode.
         """
         temp = deque_helper(self._deque_dict["arm_cmd"], latest=True)
         if temp is not None:
@@ -507,14 +515,19 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         _arm_actuator_cmd.effort = eff + comp
 
         if mode == HexDcRoboArmCtrlMode.MIT:
-            if jnt_info.pos is not None and jnt_info.pos.size == dof:
-                _arm_actuator_cmd.position = np.asarray(jnt_info.pos, dtype=np.float32)
-            if jnt_info.kp is not None and jnt_info.kp.size == dof:
-                _arm_actuator_cmd.stiffness = np.asarray(jnt_info.kp, dtype=np.float32)
-            if jnt_info.kd is not None and jnt_info.kd.size == dof:
-                _arm_actuator_cmd.damping = np.asarray(jnt_info.kd, dtype=np.float32)
-            if jnt_info.vel is not None and jnt_info.vel.size == dof:
-                _arm_actuator_cmd.velocity = np.asarray(jnt_info.vel, dtype=np.float32)
+            # which writes 0 for every None region of a MIT command.
+            _arm_actuator_cmd.position = np.asarray(jnt_info.pos, dtype=np.float32) \
+                if jnt_info.pos is not None and jnt_info.pos.size == dof \
+                else np.zeros(dof, dtype=np.float32)
+            _arm_actuator_cmd.stiffness = np.asarray(jnt_info.kp, dtype=np.float32) \
+                if jnt_info.kp is not None and jnt_info.kp.size == dof \
+                else np.zeros(dof, dtype=np.float32)
+            _arm_actuator_cmd.damping = np.asarray(jnt_info.kd, dtype=np.float32) \
+                if jnt_info.kd is not None and jnt_info.kd.size == dof \
+                else np.zeros(dof, dtype=np.float32)
+            _arm_actuator_cmd.velocity = np.asarray(jnt_info.vel, dtype=np.float32) \
+                if jnt_info.vel is not None and jnt_info.vel.size == dof \
+                else np.zeros(dof, dtype=np.float32)
 
         elif mode == HexDcRoboArmCtrlMode.JNT:
             if jnt_info.pos is None or jnt_info.pos.size != dof:
@@ -535,15 +548,14 @@ class HexRobotSimArcherY6(HexRobotSimBase):
             self._set_position_interp_command(
                 _arm_actuator_cmd, np.asarray(tar_pos, dtype=np.float32), jnt_info, dof)
 
-        # Push only if at least one field was set
-        if any(v is not None for v in
-               [_arm_actuator_cmd.position, _arm_actuator_cmd.velocity, _arm_actuator_cmd.effort, _arm_actuator_cmd.stiffness, _arm_actuator_cmd.damping]):
-            self._sim_interface.push_command(actuator=self._arm_actuator, cmd=_arm_actuator_cmd)
+        # All fields are always set (value or zeros) in every mode, so the
+        # command is always pushed — a full MIT-form write each step.
+        self._sim_interface.push_command(actuator=self._arm_actuator, cmd=_arm_actuator_cmd)
 
-    def _ik_target(self, arm_ctrl) -> tuple[bool, np.ndarray]:
+    def _ik_target(self, arm_ctrl: HexDcRoboArmCtrl) -> tuple[bool, np.ndarray]:
         """Run analytic IK on an EE pose command → (success, target positions).
 
-        Same call as the Mujoco reference (``HexDynUtilY6``, wxyz quaternion).
+        Uses `HexDynUtilY6` with a wxyz quaternion.
         """
         pose = arm_ctrl.pose
         pos = np.array([pose.position.x, pose.position.y, pose.position.z])
@@ -553,13 +565,14 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         return self._dyn_util.inverse_kinematics_analytic((pos, ori), cur_pos)
 
     def _set_position_interp_command(
-        self, actuator_cmd: ActuatorCmd, target_pos: np.ndarray, jnt_info, dof: int
+        self, actuator_cmd: ActuatorCmd, target_pos: np.ndarray,
+        jnt_info: HexDcBaseJntFull, dof: int,
     ) -> None:
-        """Interpolate toward ``target_pos`` and restore load-time default PD.
+        """Interpolate toward `target_pos` and restore load-time default PD.
 
         Shared by the JNT and EE branches: commanded position is first
-        ``interp_joint``-limited toward the target, then the load-time default
-        stiffness/damping are applied (mirrors mujoco JNT behavior).
+        `interp_joint`-limited toward the target, then the load-time default
+        stiffness/damping are applied.
         """
         current_pos = self._cur_state["arm"]["jnt_pos"]
         lim_vel = (np.asarray(jnt_info.lim_vel, dtype=np.float32)
@@ -571,7 +584,7 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         actuator_cmd.position = interp_joint(current_pos, target_pos, err_limit).astype(np.float32)
         actuator_cmd.stiffness = self._arm_kp_default.astype(np.float32)
         actuator_cmd.damping = self._arm_kd_default.astype(np.float32)
-        actuator_cmd.velocity = np.zeros(dof, dtype=np.float32)  # mujoco JNT vel term = 0
+        actuator_cmd.velocity = np.zeros(dof, dtype=np.float32)  # JNT: no velocity term
 
     def _process_grip_cmd(self) -> None:
         """Convert latest grip command to ActuatorCmd and push to sim."""
@@ -625,7 +638,7 @@ class HexRobotSimArcherY6(HexRobotSimBase):
         self._cur_state["arm"]["jnt_eff"][:] = eff
 
         # Gravity/Coriolis compensation for the current state (one-step delay,
-        # same as mujoco — computed from the state just read, applied next step).
+        # computed from the state just read, applied next step).
         self._cur_state["arm"]["comp_tau"][:] = (
             sim.get_gravity_coriolis_compensation(self._arm_actuator))
     
@@ -673,18 +686,20 @@ class HexRobotSimArcherY6(HexRobotSimBase):
 # Module-level helpers  (deferred import to respect AppLauncher constraint)
 # ---------------------------------------------------------------------------
 
-def _grip_val(arr, idx: int = 0, default: float = 0.0) -> float:
+def _grip_val(
+    arr: Optional[np.ndarray], idx: int = 0, default: float = 0.0,
+) -> float:
     """Safely extract a single float from an optional array (1-DOF grip cmd)."""
     if arr is not None and arr.size > idx:
         return float(np.asarray(arr).flat[idx])
     return default
 
 
-def _import_articulation_cfg(grip_type: str):
-    """Import the right ArticulationCfg based on grip type.
+def _import_articulation_cfg(grip_type: str) -> ArticulationCfg:
+    """Import the right `ArticulationCfg` based on the grip type.
 
-    This function is called from init_robot(), *after* AppLauncher is created,
-    so isaaclab imports are safe.
+    Called from `init_robot()` — *after* AppLauncher is created — so
+    isaaclab imports are safe here.
     """
     key = _GRIP_TO_USD.get(grip_type, "HEX_ISAAC_USD_ARCHER_Y6_GR100_CFG")
     from hex_isaac_usd.configs import (

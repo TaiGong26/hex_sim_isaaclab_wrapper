@@ -1,23 +1,23 @@
 """IsaacLabArmInterface — Isaac Lab backend for SimInterface.
 
-CRITICAL TIMING CONSTRAINT
---------------------------
-``AppLauncher`` MUST be instantiated **before** any ``import isaaclab.*``
-statement.  Therefore **all** isaaclab imports in this file happen inside
+## Critical timing constraint
+
+`AppLauncher` MUST be instantiated **before** any `import isaaclab.*`
+statement. Therefore **all** isaaclab imports in this file happen inside
 method bodies, never at module level.
 
-Thread-safety note
-------------------
-``ArticulationData`` is **not** thread-safe (no locks, no clones on read).
-In this design all sim data access (getters, step, apply_commands) happens on
-a single work thread.  The ``_pending_cmds`` dict is also work-thread-only.
-Cross-thread boundary is at the robot layer's deques (``_deque_dict`` /
-``_deque_user``).
+## Thread-safety note
 
-Import-race avoidance
----------------------
-``initialize()`` eagerly loads **all** isaaclab modules that other methods
-will need, so they are in ``sys.modules`` before the work thread ever starts.
+`ArticulationData` is **not** thread-safe (no locks, no clones on read).
+In this design all sim data access (getters, step, apply_commands) happens on
+a single work thread. The `_pending_cmds` dict is also work-thread-only.
+Cross-thread boundary is at the robot layer's deques (`_deque_dict` /
+`_deque_user`).
+
+## Import-race avoidance
+
+`initialize()` eagerly loads **all** isaaclab modules that other methods
+will need, so they are in `sys.modules` before the work thread ever starts.
 Method-level import statements are then just trivial cache lookups — no
 race condition even when called on a background thread.
 """
@@ -29,6 +29,8 @@ from typing import Optional, TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
+    import torch
+    from isaaclab.assets import ArticulationCfg
     from isaaclab.assets.articulation.articulation import Articulation
 
 from ..utils import numpy_to_torch, torch_to_numpy
@@ -36,24 +38,28 @@ from .interface import SimInterface, ActuatorCmd
 
 
 class IsaacLabArmInterface(SimInterface):
-    """Isaac Lab implementation of SimInterface.
+    """Isaac Lab implementation of `SimInterface`.
 
-    Usage (inside a method, not at module level)::
+    Example (inside a method, not at module level):
 
-        sim = IsaacLabArmInterface()
-        sim.initialize(cli_args=["--headless"], device="cuda:0", num_envs=1)
-        sim.spawn_robot("arm", some_articulation_cfg)
-        # Ready to step:
-        sim.step()
-        pos = sim.get_joint_positions("archer_y6")
+    ```python
+    sim = IsaacLabArmInterface()
+    sim.initialize(cli_args=["--headless"], device="cuda:0", num_envs=1)
+    sim.spawn_robot("arm", some_articulation_cfg)
+    sim.step()  # ready to step
+    pos = sim.get_joint_positions("archer_y6")
+    ```
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """Initialize interface state; call `initialize()` before use."""
         self._app = None
         self._sim = None
         self._scene = None
         self._num_envs = 1
         self._sim_dt = 0.0
+        self._render_interval = 1
+        self._sim_step_counter = 0
         self._device = "cuda:0"
         self._robot_configs: dict[str, tuple] = {}
         self._scene_ready = False
@@ -68,7 +74,8 @@ class IsaacLabArmInterface(SimInterface):
     # ------------------------------------------------------------------
 
     def initialize(self, cli_args: Optional[list[str]] = None,
-                   device: str = "cuda:0", num_envs: int = 1, dt:float = 60.0,
+                   device: str = "cuda:0", num_envs: int = 1, dt: float = 60.0,
+                   render_rate: float = 60.0,
                    camera_pos: tuple[float, float, float] = (2.5, 0.0, 4.0),
                    camera_target: tuple[float, float, float] = (0.0, 0.0, 2.0),
                    sim_env=None) -> None:
@@ -77,14 +84,17 @@ class IsaacLabArmInterface(SimInterface):
         Must be called first — creates AppLauncher + SimulationContext.
 
         Args:
-            cli_args:     CLI argument list (e.g. ``["--headless"]``).
+            cli_args:     CLI argument list (e.g. `["--headless"]`).
             device:       Torch device string.
             num_envs:     Number of parallel environments.
+            dt:           Control-loop rate [Hz]; sim step dt = 1/dt.
+            render_rate:  Rendering frequency [Hz]; physics steps per render
+                          = round(dt / render_rate).
             camera_pos:   Initial camera position.
             camera_target: Initial camera look-at target.
-            sim_env:      Environment config (a ``HexSimEnvParams``-like object
-                          with ``ground_cfg``, ``dome_light_cfg``, etc.).
-                          ``None`` uses built-in defaults.
+            sim_env:      Environment config (a `HexSimEnvParams`-like object
+                          with `ground_cfg`, `dome_light_cfg`, etc.).
+                          `None` uses built-in defaults.
         """
         # ---- critical: AppLauncher before ANY isaaclab import ----
         import argparse
@@ -113,7 +123,10 @@ class IsaacLabArmInterface(SimInterface):
         from isaaclab.scene import InteractiveScene, InteractiveSceneCfg  # noqa: F811
         from isaaclab.utils import configclass  # noqa: F811
 
-        sim_cfg = sim_utils.SimulationCfg(device=device, dt=(1/dt))
+        render_interval = max(1, int(round(dt / render_rate)))
+        self._render_interval = render_interval
+        sim_cfg = sim_utils.SimulationCfg(device=device, dt=(1/dt),
+                                          render_interval=render_interval)
         self._sim = sim_utils.SimulationContext(sim_cfg)
         self._sim_dt = self._sim.get_physics_dt()
         self._sim.set_camera_view(camera_pos, camera_target)
@@ -137,7 +150,7 @@ class IsaacLabArmInterface(SimInterface):
     # Robot spawning
     # ------------------------------------------------------------------
 
-    def spawn_robot(self, name: str, articulation_cfg,
+    def spawn_robot(self, name: str, articulation_cfg: ArticulationCfg,
                     prim_path: Optional[str] = None) -> None:
         """Register a robot and build the scene immediately."""
         if self._scene_ready:
@@ -157,10 +170,10 @@ class IsaacLabArmInterface(SimInterface):
     # Internal accessor
     # ------------------------------------------------------------------
 
-    def _get_articulation(self):
-        """Return the Articulation object, raising if scene isn't ready.
+    def _get_articulation(self) -> Articulation:
+        """Return the `Articulation` object, raising if the scene isn't ready.
 
-        Uses internally stored ``_robot_name`` — no caller-side name needed.
+        Uses the internally stored `_robot_name` — no caller-side name needed.
         """
         self._require_scene_ready()
         return self._scene[self._robot_name]
@@ -177,26 +190,26 @@ class IsaacLabArmInterface(SimInterface):
     # ------------------------------------------------------------------
 
     def get_joint_positions(self, actuator: str) -> np.ndarray:
-        """:meth:`SimInterface.get_joint_positions`."""
+        """Read joint positions [rad] for an actuator as a `(num_joints,)` array."""
         articulation = self._get_articulation()
         jids = articulation.actuators[actuator].joint_indices
         joint_pos = articulation.data.joint_pos.clone()
         return torch_to_numpy(joint_pos[0, jids])
 
     def get_joint_velocities(self, actuator: str) -> np.ndarray:
-        """:meth:`SimInterface.get_joint_velocities`."""
+        """Read joint velocities [rad/s] for an actuator as a `(num_joints,)` array."""
         articulation = self._get_articulation()
         jids = articulation.actuators[actuator].joint_indices
         joint_vel = articulation.data.joint_vel.clone()
         return torch_to_numpy(joint_vel[0, jids])
 
     def get_joint_efforts(self, actuator: str) -> np.ndarray:
-        """:meth:`SimInterface.get_joint_efforts`.
+        """Read joint efforts [Nm] for an actuator as a `(num_joints,)` array.
 
-        .. note::
-           For ``ImplicitActuator``, the returned torque is an *approximation*
-           computed by Isaac Lab (PhysX does not expose implicit PD torque).
-           The ``applied_torque`` tensor is updated in-place during each step.
+        > **Note:** For `ImplicitActuator`, the returned torque is an
+        *approximation* computed by Isaac Lab (PhysX does not expose implicit
+        PD torque). The `applied_torque` tensor is updated in-place during
+        each step.
         """
         articulation = self._get_articulation()
         jids = articulation.actuators[actuator].joint_indices
@@ -204,10 +217,10 @@ class IsaacLabArmInterface(SimInterface):
         return torch_to_numpy(torque[0, jids])
 
     def get_gravity_coriolis_compensation(self, actuator: str) -> np.ndarray:
-        """:meth:`SimInterface.get_gravity_coriolis_compensation`.
+        """Read gravity + Coriolis/centrifugal compensation torques [Nm].
 
         PhysX-native: gravity compensation + Coriolis/centrifugal compensation,
-        summed = ``C*dq + G`` for the current articulation state.
+        summed = `C*dq + G` for the current articulation state.
         """
         articulation = self._get_articulation()
         jids = articulation.actuators[actuator].joint_indices
@@ -224,13 +237,14 @@ class IsaacLabArmInterface(SimInterface):
         cfg.resolve(self._scene)
         return cfg.body_ids[0]
 
-    def _body_pose_world(self, body_idx: int):
-        """World pose ``[pos(3), quat_wxyz(4)]`` of a body, shape ``(7,)``."""
+    def _body_pose_world(self, body_idx: int) -> torch.Tensor:
+        """World pose `[pos(3), quat_wxyz(4)]` of a body, shape `(7,)`."""
         articulation = self._get_articulation()
         return articulation.data.body_pose_w[0, body_idx]
 
-    def _relative_pose(self, base_pose_w, target_pose_w) -> tuple[np.ndarray, np.ndarray]:
-        """Express ``target_pose_w`` relative to ``base_pose_w`` → (pos, quat wxyz)."""
+    def _relative_pose(self, base_pose_w: torch.Tensor,
+                       target_pose_w: torch.Tensor) -> tuple[np.ndarray, np.ndarray]:
+        """Express `target_pose_w` relative to `base_pose_w` → (pos, quat wxyz)."""
         import isaaclab.utils.math as math_utils
 
         pos_b, quat_b = math_utils.subtract_frame_transforms(
@@ -281,7 +295,7 @@ class IsaacLabArmInterface(SimInterface):
     def _apply_commands(self) -> None:
         """Apply all pending commands to the articulation.
 
-        Called from :meth:`step()` — operates on the work thread only.
+        Called from `step()` — operates on the work thread only.
         """
         if not self._pending_cmds:
             return
@@ -318,9 +332,14 @@ class IsaacLabArmInterface(SimInterface):
                 articulation.write_joint_stiffness_to_sim(kp, joint_ids=jids)
                 articulation.write_joint_damping_to_sim(kd, joint_ids=jids)
 
-        # self._pending_cmds.clear()
 
     def set_joint_state(self, position: np.ndarray, velocity: np.ndarray) -> None:
+        """Set joint positions/velocities directly, then reset the articulation.
+
+        Args:
+            position: Target joint positions [rad].
+            velocity: Target joint velocities [rad/s].
+        """
         articulation = self._get_articulation()
         p = numpy_to_torch(position, self._device).unsqueeze(0)
         v = numpy_to_torch(velocity, self._device).unsqueeze(0)
@@ -328,6 +347,7 @@ class IsaacLabArmInterface(SimInterface):
         articulation.reset()
 
     def get_sim_time(self) -> float:
+        """Return the current simulation time [s]."""
         return self._sim.current_time
 
     # ------------------------------------------------------------------
@@ -335,13 +355,17 @@ class IsaacLabArmInterface(SimInterface):
     # ------------------------------------------------------------------
 
     def step(self) -> None:
-        """Advance physics by one dt.
+        """Advance physics by one dt; render every `_render_interval` steps (GUI only).
 
-        Order: apply pending commands → flush to sim → step → update scene.
+        Order: apply pending commands → flush to sim → physics step → throttled
+        render → update scene. Mirror of `ManagerBasedEnv`'s render loop.
         """
         self._apply_commands()
         self._scene.write_data_to_sim()
-        self._sim.step()
+        self._sim_step_counter += 1
+        self._sim.step(render=False)
+        if self._sim_step_counter % self._render_interval == 0 and self._sim.has_gui():
+            self._sim.render()
         self._scene.update(self._sim_dt)
 
     # ==================================================================
@@ -351,9 +375,9 @@ class IsaacLabArmInterface(SimInterface):
     def _build_scene(self) -> None:
         """Dynamically build the InteractiveScene from registered configs.
 
-        Scene composition is driven by ``self._sim_env`` (set via
-        :meth:`initialize`).  If ``_sim_env`` is ``None``, built-in
-        defaults (ground plane + dome light) are used.
+        Scene composition is driven by `self._sim_env` (set via
+        `initialize()`). If `_sim_env` is `None`, built-in defaults
+        (ground plane + dome light) are used.
         """
         import isaaclab.sim as sim_utils
         from isaaclab.assets import AssetBaseCfg

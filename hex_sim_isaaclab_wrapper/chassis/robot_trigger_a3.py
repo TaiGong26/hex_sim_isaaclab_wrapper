@@ -44,7 +44,7 @@ _CHS_WHEEL_RADIUS = 0.102
 #: Distance from the base centre to each wheel centre [m].
 _CHS_WHEEL_DISTANCE = 0.2895
 #: Velocity-tracking gain, `tau = kd·(motor_vel − qd)` (kp not used) [N·s/rad].
-_CHS_KD_DEFAULT = 1.0
+_CHS_KD_DEFAULT = 10.0
 
 
 @dataclass

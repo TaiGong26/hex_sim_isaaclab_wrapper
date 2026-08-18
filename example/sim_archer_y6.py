@@ -28,7 +28,6 @@ def main() -> None:
         --headless: Run without a GUI window.
     """
     parser = argparse.ArgumentParser(description="Archer Y6 sim smoke test")
-    parser.add_argument("--steps", type=int, default=0, help="Steps (0=infinite)")
     parser.add_argument("--headless", action="store_true", help="Run without GUI window")
     args = parser.parse_args()
 
@@ -47,13 +46,7 @@ def main() -> None:
     print("[INFO]: Setup complete, starting joint cycling.", flush=True)
 
     count = 0
-    total = 0
-    freq_t0 = time.monotonic()
-    freq_c0 = 0
     while robot.is_working():
-        if args.steps > 0 and total >= args.steps:
-            break
-        total += 1
 
         if count < 200:
             target = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -103,7 +96,6 @@ def main() -> None:
         time.sleep(1.0 / params.ctrl_rate)
 
     robot.stop()
-    print(f"[INFO]: Done ({total} steps).")
 
 
 if __name__ == "__main__":

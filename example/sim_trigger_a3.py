@@ -28,7 +28,7 @@ def main():
     params = HexRobotSimTriggerA3Params(
         isaac_headless=args.headless,
         ctrl_rate=1000.0,
-        render_rate=100.0,
+        render_rate=50.0,
         torch_device="cpu",
     )
     robot = HexRobotSimTriggerA3(params)
@@ -36,11 +36,12 @@ def main():
     dof = 3
     
     robot.step()
+    count=0
     
     while robot.is_working():
         robot.set_chs_vel_cmd({
-            "vx": 0.0,
-            "vy": 1.0,
+            "vx": 1.0,
+            "vy": 0.0,
             "omega": 0.0,
         })
         

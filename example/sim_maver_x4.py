@@ -52,8 +52,8 @@ def main() -> None:
     count = 0
     while robot.is_working():
         robot.set_chs_vel_cmd({
-            "vx": 0.0,
-            "vy": 1.0,
+            "vx": 1.0,
+            "vy": 0.0,
             "omega": 0.0,
         })
         

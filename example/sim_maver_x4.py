@@ -31,7 +31,6 @@ def main() -> None:
         --headless: Run without a GUI window.
     """
     parser = argparse.ArgumentParser(description="Maver X4 chassis sim smoke test")
-    parser.add_argument("--steps", type=int, default=0, help="Steps (0=infinite)")
     parser.add_argument("--headless", action="store_true", help="Run without GUI window")
     args = parser.parse_args()
 
@@ -43,6 +42,7 @@ def main() -> None:
     )
     robot = HexRobotSimMaverX4(params)
     robot.start()
+    robot.step()
     print("[INFO]: Setup complete, starting X4 MIT test.", flush=True)
 
     dof = 8
@@ -50,23 +50,22 @@ def main() -> None:
     jnt_vel[[0, 2, 4, 6]] = 3.0   # canonical order: drive = joint_wheel1..4
 
     count = 0
-    freq_t0 = time.monotonic()
-    freq_c0 = 0
     while robot.is_working():
-        if args.steps > 0 and count >= args.steps:
-            break
-        robot.set_chs_mit_cmd({
-            "jnt_pos": np.zeros(dof),
-            "jnt_vel": jnt_vel,
-            "mit_tau": np.zeros(dof),
-            "mit_kp": np.zeros(dof),
-            "mit_kd": np.full(dof, 3.0),
+        robot.set_chs_vel_cmd({
+            "vx": 0.0,
+            "vy": 1.0,
+            "omega": 0.0,
         })
+        
+        # robot.set_chs_mit_cmd({
+        #     "jnt_pos": np.zeros(dof),
+        #     "jnt_vel": jnt_vel,
+        #     "mit_tau": np.zeros(dof),
+        #     "mit_kp": np.zeros(dof),
+        #     "mit_kd": np.full(dof, 3.0),
+        # })
         robot.step()
         if count % 50 == 0:
-            now = time.monotonic()
-            actual_hz = (count - freq_c0) / (now - freq_t0)
-            freq_t0, freq_c0 = now, count
             st = robot.get_chassis_state()
             if st is not None:
                 cs = st.chs_state

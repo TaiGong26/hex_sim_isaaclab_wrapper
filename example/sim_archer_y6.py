@@ -36,8 +36,9 @@ def main() -> None:
     params = HexRobotSimArcherY6Params(
         isaac_headless=args.headless,
         grip_type="gr100",
-        ctrl_rate = 500.0,
-        torch_device = "cuda:0",
+        ctrl_rate = 1000.0,
+        render_rate= 100.0,
+        torch_device = "cpu",
         urdf_path = None,
     )
 
